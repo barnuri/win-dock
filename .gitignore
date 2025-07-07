@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Xcode
+*.xcworkspace
+*.xcuserstate
+*.xcodeproj
+*.xcuserdata
+
+# Build
+build/
+DerivedData/
+
+# Swift Package Manager
+.swiftpm/
+Packages/
+
+# General
+*.log
+*.tmp
+*.swp
+*.swo
+*.swm
+Thumbs.db
+.build
