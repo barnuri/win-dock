@@ -269,10 +269,36 @@ struct AppContextMenu: View {
 }
 
 struct DockContextMenu: View {
+    @AppStorage("dockPosition") private var dockPosition: DockPosition = .bottom
+    
     var body: some View {
         Group {
             Button("Settings...") {
                 openSettings()
+            }
+            
+            Divider()
+            
+            Menu("Change Position") {
+                Button("Bottom") {
+                    dockPosition = .bottom
+                }
+                .disabled(dockPosition == .bottom)
+                
+                Button("Top") {
+                    dockPosition = .top
+                }
+                .disabled(dockPosition == .top)
+                
+                Button("Left") {
+                    dockPosition = .left
+                }
+                .disabled(dockPosition == .left)
+                
+                Button("Right") {
+                    dockPosition = .right
+                }
+                .disabled(dockPosition == .right)
             }
             
             Divider()
@@ -284,10 +310,9 @@ struct DockContextMenu: View {
     }
     
     private func openSettings() {
-        if #available(macOS 14.0, *) {
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        } else {
-            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        // Get the app delegate
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.openSettings()
         }
     }
 }

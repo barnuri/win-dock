@@ -107,19 +107,35 @@ jobs:
         echo "Build successful"
         ls -la build/Build/Products/Release/
     
-    - name: Create app archive
+    - name: Create DMG archive
       run: |
         cd build/Build/Products/Release
         
-        # Create a zip archive of the app
-        zip -r WinDock-${{ steps.new_version.outputs.new_version }}.zip WinDock.app
+        # Create a temporary directory for DMG creation
+        mkdir -p dmg_temp
+        cp -R WinDock.app dmg_temp/
         
-        # Move the zip to the root directory for easier access
-        mv WinDock-${{ steps.new_version.outputs.new_version }}.zip ../../../../
+        # Create a symbolic link to Applications folder for easy installation
+        ln -sf /Applications dmg_temp/Applications
+        
+        # Create the DMG file
+        DMG_NAME="WinDock-${{ steps.new_version.outputs.new_version }}.dmg"
+        hdiutil create -volname "WinDock ${{ steps.new_version.outputs.new_version }}" \
+          -srcfolder dmg_temp \
+          -ov \
+          -format UDZO \
+          -imagekey zlib-level=9 \
+          "$DMG_NAME"
+        
+        # Move the DMG to the root directory for easier access
+        mv "$DMG_NAME" ../../../../
+        
+        # Clean up temporary directory
+        rm -rf dmg_temp
         
         cd ../../../../
-        echo "Created archive: WinDock-${{ steps.new_version.outputs.new_version }}.zip"
-        ls -la WinDock-*.zip
+        echo "Created DMG: $DMG_NAME"
+        ls -la WinDock-*.dmg
     
     - name: Create release tag
       id: create_tag
@@ -151,10 +167,10 @@ jobs:
         
         ## Installation
         
-        1. Download \`WinDock-${{ steps.new_version.outputs.new_version }}.zip\`
-        2. Extract the archive
-        3. Move \`WinDock.app\` to your Applications folder
-        4. Run the app
+        1. Download \`WinDock-${{ steps.new_version.outputs.new_version }}.dmg\`
+        2. Open the DMG file
+        3. Drag \`WinDock.app\` to the Applications folder
+        4. Run the app from Applications
         
         **Note:** You may need to allow the app in System Preferences > Security & Privacy if you get a security warning."
         
@@ -169,7 +185,7 @@ jobs:
         name: WinDock ${{ steps.new_version.outputs.new_version }}
         body_path: release_notes.md
         files: |
-          WinDock-${{ steps.new_version.outputs.new_version }}.zip
+          WinDock-${{ steps.new_version.outputs.new_version }}.dmg
         draft: false
         prerelease: false
       env:
@@ -177,6 +193,6 @@ jobs:
     
     - name: Clean up
       run: |
-        rm -f WinDock-*.zip
+        rm -f WinDock-*.dmg
         rm -f release_notes.md
         echo "Cleanup completed"

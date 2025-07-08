@@ -23,3 +23,5 @@ Packages/
 *.swm
 Thumbs.db
 .build
+dmg_temp/
+*.dmg
