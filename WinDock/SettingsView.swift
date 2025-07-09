@@ -1,10 +1,3 @@
-//
-//  SettingsView.swift
-//  WinDock
-//
-//  Created by GitHub Copilot on 08/07/2025.
-//
-
 import SwiftUI
 
 struct SettingsView: View {
@@ -26,12 +19,17 @@ struct SettingsView: View {
             .tabItem {
                 Label("General", systemImage: "gear")
             }
-            
+
             AppsSettingsView()
                 .tabItem {
                     Label("Apps", systemImage: "app.badge")
                 }
-            
+
+            LogsSettingsView()
+                .tabItem {
+                    Label("Logs", systemImage: "doc.text.magnifyingglass")
+                }
+
             AboutView()
                 .tabItem {
                     Label("About", systemImage: "info.circle")
@@ -39,6 +37,44 @@ struct SettingsView: View {
         }
         .frame(width: 450, height: 400)
     }
+
+struct LogsSettingsView: View {
+    var logsDirectory: URL {
+        AppLogger.shared.logsDirectory
+    }
+    var appLogFile: URL {
+        logsDirectory.appendingPathComponent("app.log")
+    }
+    var errorsLogFile: URL {
+        logsDirectory.appendingPathComponent("errors.log")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Logs Folder")
+                .font(.headline)
+            Text(logsDirectory.path)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+            HStack(spacing: 12) {
+                Button("Open Logs Folder in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([logsDirectory])
+                }
+                Button("Open app.log") {
+                    NSWorkspace.shared.activateFileViewerSelecting([appLogFile])
+                }
+                Button("Open errors.log") {
+                    NSWorkspace.shared.activateFileViewerSelecting([errorsLogFile])
+                }
+            }
+            .buttonStyle(.bordered)
+            Spacer()
+        }
+        .padding()
+    }
+}
 }
 
 struct GeneralSettingsView: View {

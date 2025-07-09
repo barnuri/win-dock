@@ -1,10 +1,3 @@
-//
-//  DockWindow.swift
-//  WinDock
-//
-//  Created by GitHub Copilot on 08/07/2025.
-//
-
 import SwiftUI
 import AppKit
 

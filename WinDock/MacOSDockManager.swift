@@ -1,10 +1,3 @@
-//
-//  MacOSDockManager.swift
-//  WinDock
-//
-//  Created by GitHub Copilot on 08/07/2025.
-//
-
 import Foundation
 import AppKit
 

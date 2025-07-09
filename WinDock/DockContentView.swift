@@ -1,36 +1,30 @@
-//
-//  DockContentView.swift
-//  WinDock
-//
-//  Created by GitHub Copilot on 08/07/2025.
-//
-
 import SwiftUI
 import AppKit
+import Foundation
+
+// Helper view for each app icon in the dock
+// Add preview at file scope
+#if DEBUG
+#Preview {
+    DockContentView(dockSize: .medium)
+        .frame(height: 80)
+}
+#endif
 
 struct DockContentView: View {
-    private func openSettings() {
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            appDelegate.openSettings()
-        }
-    }
     @StateObject private var appManager = AppManager()
     @State private var hoveredApp: DockApp?
     @State private var showingPreview = false
     @State private var previewWindow: NSWindow?
-    
-    let dockSize: DockSize
-    
-    // Settings properties
     @AppStorage("dockPosition") private var dockPosition: DockPosition = .bottom
-    
+    let dockSize: DockSize
+
     init(dockSize: DockSize = .medium) {
         self.dockSize = dockSize
     }
-    
+
     var body: some View {
         let isVertical = dockPosition == .left || dockPosition == .right
-
         GeometryReader { geometry in
             VStack {
                 Spacer()
@@ -40,15 +34,53 @@ struct DockContentView: View {
                         if isVertical {
                             VStack(spacing: 8) {
                                 LauncherMenuIcon()
-                                ReorderableForEach(apps: $appManager.dockApps) { app in
-                                    createAppView(for: app)
+                                ForEach(appManager.dockApps) { app in
+                                    DockAppView(
+                                        app: app,
+                                        isHovered: hoveredApp?.id == app.id,
+                                        iconSize: dockSize.iconSize,
+                                        onTap: {
+                                            appManager.activateApp(app)
+                                        }
+                                    )
+                                    .onHover { hovering in
+                                        if hovering {
+                                            hoveredApp = app
+                                            showPreview(for: app)
+                                        } else {
+                                            hoveredApp = nil
+                                            hidePreview()
+                                        }
+                                    }
+                                    .contextMenu {
+                                        AppContextMenu(app: app, appManager: appManager)
+                                    }
                                 }
                             }
                         } else {
                             HStack(spacing: 8) {
                                 LauncherMenuIcon()
-                                ReorderableForEach(apps: $appManager.dockApps) { app in
-                                    createAppView(for: app)
+                                ForEach(appManager.dockApps) { app in
+                                    DockAppView(
+                                        app: app,
+                                        isHovered: hoveredApp?.id == app.id,
+                                        iconSize: dockSize.iconSize,
+                                        onTap: {
+                                            appManager.activateApp(app)
+                                        }
+                                    )
+                                    .onHover { hovering in
+                                        if hovering {
+                                            hoveredApp = app
+                                            showPreview(for: app)
+                                        } else {
+                                            hoveredApp = nil
+                                            hidePreview()
+                                        }
+                                    }
+                                    .contextMenu {
+                                        AppContextMenu(app: app, appManager: appManager)
+                                    }
                                 }
                             }
                         }
@@ -85,45 +117,117 @@ struct DockContentView: View {
         }
     }
 
-// MARK: - End of DockContentView
+    private func showPreview(for app: DockApp) {
+        hidePreview()
+        DispatchQueue.main.async {
+            let previewView = AppPreviewView(app: app)
+            let hostingView = NSHostingView(rootView: previewView)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 200, height: 150),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 3)
+            window.backgroundColor = .clear
+            window.isOpaque = false
+            window.hasShadow = false
+            window.ignoresMouseEvents = true
+            window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+            window.contentView = hostingView
+            let mouseLocation = NSEvent.mouseLocation
+            let screen = NSScreen.main
+            let yCoord = screen != nil ? (screen!.frame.height - mouseLocation.y) : mouseLocation.y
+            let previewFrame = NSRect(
+                x: mouseLocation.x - 100,
+                y: yCoord + 50,
+                width: 200,
+                height: 150
+            )
+            window.setFrame(previewFrame, display: true)
+            window.orderFront(nil)
+            self.previewWindow = window
+            AppLogger.shared.info("Preview window shown for app: \(app.name)")
+        }
+    }
 
-
-// MARK: - Drag-and-drop helpers (outside DockContentView)
-struct ReorderableForEach<App: Identifiable & Equatable, Content: View>: View {
-    @Binding var apps: [App]
-    let content: (App) -> Content
-
-    @State private var dragging: App?
-
-    var body: some View {
-        ForEach(apps) { app in
-            content(app)
-                .onDrag {
-                    self.dragging = app
-                    return NSItemProvider(object: String(describing: app.id) as NSString)
-                }
-                .onDrop(of: [.text], delegate: AppDropDelegate(item: app, apps: $apps, dragging: $dragging))
+    private func hidePreview() {
+        DispatchQueue.main.async {
+            if let window = self.previewWindow {
+                window.orderOut(nil)
+                window.close()
+                self.previewWindow = nil
+                AppLogger.shared.info("Preview window hidden")
+            }
         }
     }
 }
 
-struct AppDropDelegate<App: Identifiable & Equatable>: DropDelegate {
-    let item: App
-    @Binding var apps: [App]
-    @Binding var dragging: App?
 
-    func performDrop(info: DropInfo) -> Bool {
-        self.dragging = nil
-        // Save the new order after drop (for DockApp only)
-        if let dockApps = apps as? Binding<[DockApp]> {
-            AppManager().saveDockAppOrder()
+
+
+fileprivate func minimizeAllWindows() {
+    // Only works for Finder windows
+    let script = "tell application \"Finder\" to set collapsed of every window to true"
+    if let appleScript = NSAppleScript(source: script) {
+        var errorDict: NSDictionary? = nil
+        appleScript.executeAndReturnError(&errorDict)
+        if let errorDict = errorDict {
+            AppLogger.shared.warn("AppleScript error in minimizeAllWindows: \(errorDict)")
+        } else {
+            AppLogger.shared.info("All Finder windows minimized via AppleScript")
         }
-        return true
     }
-// MARK: - LauncherMenuIcon (uBar-style left icon with menu)
+}
+
+fileprivate func closeAllWindows() {
+    let script = "tell application \"System Events\" to keystroke 'w' using {command down, option down}"
+    if let appleScript = NSAppleScript(source: script) {
+        var errorDict: NSDictionary? = nil
+        appleScript.executeAndReturnError(&errorDict)
+        if let errorDict = errorDict {
+            AppLogger.shared.warn("AppleScript error in closeAllWindows: \(errorDict)")
+        } else {
+            AppLogger.shared.info("All windows closed via AppleScript")
+        }
+    }
+}
+
+fileprivate func openSettings() {
+    if let appDelegate = NSApp.delegate as? AppDelegate {
+        appDelegate.openSettings()
+        AppLogger.shared.info("Settings opened from dock context menu")
+    }
+}
+
+fileprivate func lockScreen() {
+    do {
+        let task = Process()
+        task.launchPath = "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession"
+        task.arguments = ["-suspend"]
+        try task.run()
+        AppLogger.shared.info("Lock screen triggered from dock menu")
+    } catch {
+        AppLogger.shared.error("Error in lockScreen: \(error)")
+    }
+}
+
+fileprivate func openMonitor() {
+    if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.ActivityMonitor") {
+        let config = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.openApplication(at: url, configuration: config, completionHandler: { _, error in
+            if let error = error {
+                AppLogger.shared.warn("Error opening Activity Monitor: \(error)")
+            } else {
+                AppLogger.shared.info("Activity Monitor opened from dock menu")
+            }
+        })
+    }
+}
+
+
 struct LauncherMenuIcon: View {
     @State private var showMenu = false
-
     var body: some View {
         Button(action: { showMenu.toggle() }) {
             Image(systemName: "circle.grid.3x3.fill")
@@ -133,7 +237,7 @@ struct LauncherMenuIcon: View {
                 .padding(6)
                 .background(Color.gray.opacity(0.25))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
-                                        LauncherMenuIcon()
+        }
         .buttonStyle(PlainButtonStyle())
         .popover(isPresented: $showMenu, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
@@ -141,129 +245,10 @@ struct LauncherMenuIcon: View {
                 Button("Open Monitor") { openMonitor() }
                 Button("Minimize All Windows") { minimizeAllWindows() }
                 Button("Close All Windows") { closeAllWindows() }
-                                        LauncherMenuIcon()
                 Button("Settings...") { openSettings() }
-                Button("Quit Win Dock") { NSApplication.shared.terminate(nil) }
             }
-            .padding(12)
-            .frame(width: 180)
-        }
-    }
-
-    private func lockScreen() {
-        let task = Process()
-        task.launchPath = "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession"
-        task.arguments = ["-suspend"]
-        try? task.run()
-    }
-    private func openMonitor() {
-        NSWorkspace.shared.launchApplication("Activity Monitor")
-    }
-    private func minimizeAllWindows() {
-        let script = "tell application \"System Events\" to keystroke 'm' using {command down, option down}"
-        if let appleScript = NSAppleScript(source: script) {
-            appleScript.executeAndReturnError(nil)
-        }
-    }
-    private func closeAllWindows() {
-        let script = "tell application \"System Events\" to keystroke 'w' using {command down, option down}"
-        if let appleScript = NSAppleScript(source: script) {
-            appleScript.executeAndReturnError(nil)
-        }
-    }
-    private func openSettings() {
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            appDelegate.openSettings()
-        }
     }
 }
-
-    func dropEntered(info: DropInfo) {
-        guard let dragging = dragging, dragging != item,
-              let from = apps.firstIndex(of: dragging),
-              let to = apps.firstIndex(of: item) else { return }
-        withAnimation {
-            apps.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
-        }
-    }
-}
-    
-    private func showPreview(for app: DockApp) {
-        hidePreview() // Hide any existing preview
-        
-        let previewView = AppPreviewView(app: app)
-        let hostingView = NSHostingView(rootView: previewView)
-        
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 200, height: 150),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        
-        window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 3)
-        window.backgroundColor = .clear
-        window.isOpaque = false
-        window.hasShadow = false
-        window.ignoresMouseEvents = true
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-        window.contentView = hostingView
-        
-        // Position the preview window above the mouse
-        let mouseLocation = NSEvent.mouseLocation.screenCoordinate
-        let previewFrame = NSRect(
-            x: mouseLocation.x - 100,
-            y: mouseLocation.y + 50,
-            width: 200,
-            height: 150
-        )
-        window.setFrame(previewFrame, display: true)
-        
-        window.orderFront(nil)
-        previewWindow = window
-    }
-    
-    private func hidePreview() {
-        previewWindow?.close()
-        previewWindow = nil
-    }
-    
-    private func createAppView(for app: DockApp) -> some View {
-        DockAppView(
-            app: app,
-            isHovered: hoveredApp?.id == app.id,
-            iconSize: dockSize.iconSize
-        ) {
-            appManager.activateApp(app)
-        }
-        .onHover { isHovering in
-            if isHovering {
-                hoveredApp = app
-                showingPreview = true
-                showPreview(for: app)
-            } else {
-                hoveredApp = nil
-                showingPreview = false
-                hidePreview()
-            }
-        }
-        .contextMenu {
-            AppContextMenu(app: app, appManager: appManager)
-        }
-    }
-    
-    private func getPreviewAlignment() -> Alignment {
-        switch dockPosition {
-        case .bottom:
-            return .top
-        case .top:
-            return .bottom
-        case .left:
-            return .trailing
-        case .right:
-            return .leading
-        }
-    }
 }
 
 struct DockAppView: View {
@@ -476,15 +461,3 @@ struct AppPreviewView: View {
     }
 }
 
-// Extension to help with screen coordinates
-extension CGPoint {
-    var screenCoordinate: CGPoint {
-        guard let screen = NSScreen.main else { return self }
-        return CGPoint(x: self.x, y: screen.frame.height - self.y)
-    }
-}
-
-#Preview {
-    DockContentView(dockSize: .medium)
-        .frame(height: 80)
-}
