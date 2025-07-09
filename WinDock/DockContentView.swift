@@ -16,7 +16,13 @@ struct DockContentView: View {
     @State private var hoveredApp: DockApp?
     @State private var showingPreview = false
     @State private var previewWindow: NSWindow?
+    @State private var draggedApp: DockApp?
+    @State private var showStartMenu = false
     @AppStorage("dockPosition") private var dockPosition: DockPosition = .bottom
+    @AppStorage("showSystemTray") private var showSystemTray: Bool = true
+    @AppStorage("showTaskView") private var showTaskView: Bool = true
+    @AppStorage("centerTaskbarIcons") private var centerTaskbarIcons: Bool = true
+    
     let dockSize: DockSize
 
     init(dockSize: DockSize = .medium) {
@@ -29,85 +35,44 @@ struct DockContentView: View {
             VStack {
                 Spacer()
                 HStack {
-                    Spacer(minLength: 0)
+                    if centerTaskbarIcons && !isVertical {
+                        Spacer()
+                    }
+                    
                     Group {
                         if isVertical {
-                            VStack(spacing: 8) {
-                                LauncherMenuIcon()
-                                ForEach(appManager.dockApps) { app in
-                                    DockAppView(
-                                        app: app,
-                                        isHovered: hoveredApp?.id == app.id,
-                                        iconSize: dockSize.iconSize,
-                                        onTap: {
-                                            appManager.activateApp(app)
-                                        }
-                                    )
-                                    .onHover { hovering in
-                                        if hovering {
-                                            hoveredApp = app
-                                            showPreview(for: app)
-                                        } else {
-                                            hoveredApp = nil
-                                            hidePreview()
-                                        }
-                                    }
-                                    .contextMenu {
-                                        AppContextMenu(app: app, appManager: appManager)
-                                    }
-                                }
+                            VStack(spacing: 4) {
+                                taskbarContent
                             }
                         } else {
-                            HStack(spacing: 8) {
-                                LauncherMenuIcon()
-                                ForEach(appManager.dockApps) { app in
-                                    DockAppView(
-                                        app: app,
-                                        isHovered: hoveredApp?.id == app.id,
-                                        iconSize: dockSize.iconSize,
-                                        onTap: {
-                                            appManager.activateApp(app)
-                                        }
-                                    )
-                                    .onHover { hovering in
-                                        if hovering {
-                                            hoveredApp = app
-                                            showPreview(for: app)
-                                        } else {
-                                            hoveredApp = nil
-                                            hidePreview()
-                                        }
-                                    }
-                                    .contextMenu {
-                                        AppContextMenu(app: app, appManager: appManager)
-                                    }
-                                }
+                            HStack(spacing: 4) {
+                                taskbarContent
                             }
                         }
                     }
-                    .padding(isVertical ? .vertical : .horizontal, 8)
-                    .padding(isVertical ? .horizontal : .vertical, 6)
+                    .padding(6)
                     .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color.black.opacity(0.85))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                            )
-                            .shadow(color: .black.opacity(0.35), radius: 16, x: 0, y: 6)
+                        WindowsTaskbarBackground()
                     )
-                    .frame(maxWidth: geometry.size.width * 0.98)
-                    .frame(height: 64)
-                    .padding(.bottom, 8)
-                    Spacer(minLength: 0)
+                    .frame(maxWidth: isVertical ? nil : (centerTaskbarIcons ? nil : geometry.size.width * 0.98))
+                    .frame(height: isVertical ? nil : 48)
+                    .padding(.bottom, 2)
+                    
+                    if centerTaskbarIcons && !isVertical {
+                        Spacer()
+                    }
+                    
+                    // System tray area for horizontal dock
+                    if !isVertical && showSystemTray {
+                        SystemTrayView()
+                            .frame(height: 48)
+                            .padding(.trailing, 10)
+                    }
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottom)
         }
         .background(Color.clear)
-        .contextMenu {
-            DockContextMenu()
-        }
         .onAppear {
             appManager.startMonitoring()
         }
@@ -116,14 +81,123 @@ struct DockContentView: View {
             hidePreview()
         }
     }
+    
+    @ViewBuilder
+    private var taskbarContent: some View {
+        // Start button
+        StartButton(showMenu: $showStartMenu)
+            .popover(isPresented: $showStartMenu, arrowEdge: .bottom) {
+                StartMenuView()
+            }
+        
+        // Search button
+        SearchButton()
+        
+        // Task view button
+        if showTaskView {
+            TaskViewButton()
+        }
+        
+        // Separator
+        Rectangle()
+            .fill(Color.white.opacity(0.2))
+            .frame(width: 1, height: 24)
+            .padding(.horizontal, 4)
+        
+        // App icons with drag and drop
+        ForEach(appManager.dockApps) { app in
+            WindowsTaskbarIcon(
+                app: app,
+                isHovered: hoveredApp?.id == app.id,
+                iconSize: dockSize.iconSize,
+                onTap: {
+                    appManager.activateApp(app)
+                },
+                onRightClick: { location in
+                    showContextMenu(for: app, at: location)
+                }
+            )
+            .onHover { hovering in
+                if hovering {
+                    hoveredApp = app
+                    showPreview(for: app)
+                } else {
+                    hoveredApp = nil
+                    hidePreview()
+                }
+            }
+            .onDrag {
+                self.draggedApp = app
+                return NSItemProvider(object: app.bundleIdentifier as NSString)
+            }
+            .onDrop(of: [.text], delegate: AppDropDelegate(
+                app: app,
+                apps: $appManager.dockApps,
+                draggedApp: $draggedApp,
+                appManager: appManager
+            ))
+        }
+    }
+    
+    private func showContextMenu(for app: DockApp, at location: CGPoint) {
+        let menu = NSMenu()
+        
+        if app.isRunning {
+            let showAllItem = NSMenuItem(title: "Show All Windows", action: #selector(AppMenuHandler.showAllWindows(_:)), keyEquivalent: "")
+            showAllItem.representedObject = app
+            showAllItem.target = AppMenuHandler.shared
+            menu.addItem(showAllItem)
+            
+            let hideItem = NSMenuItem(title: "Hide", action: #selector(AppMenuHandler.hideApp(_:)), keyEquivalent: "")
+            hideItem.representedObject = app
+            hideItem.target = AppMenuHandler.shared
+            menu.addItem(hideItem)
+            
+            menu.addItem(NSMenuItem.separator())
+            
+            let quitItem = NSMenuItem(title: "Quit", action: #selector(AppMenuHandler.quitApp(_:)), keyEquivalent: "")
+            quitItem.representedObject = app
+            quitItem.target = AppMenuHandler.shared
+            menu.addItem(quitItem)
+        } else {
+            let openItem = NSMenuItem(title: "Open", action: #selector(AppMenuHandler.openApp(_:)), keyEquivalent: "")
+            openItem.representedObject = app
+            openItem.target = AppMenuHandler.shared
+            menu.addItem(openItem)
+        }
+        
+        menu.addItem(NSMenuItem.separator())
+        
+        if app.isPinned {
+            let unpinItem = NSMenuItem(title: "Unpin from taskbar", action: #selector(AppMenuHandler.unpinApp(_:)), keyEquivalent: "")
+            unpinItem.representedObject = app
+            unpinItem.target = AppMenuHandler.shared
+            menu.addItem(unpinItem)
+        } else {
+            let pinItem = NSMenuItem(title: "Pin to taskbar", action: #selector(AppMenuHandler.pinApp(_:)), keyEquivalent: "")
+            pinItem.representedObject = app
+            pinItem.target = AppMenuHandler.shared
+            menu.addItem(pinItem)
+        }
+        
+        // Add recent documents if available
+        if app.isRunning {
+            menu.addItem(NSMenuItem.separator())
+            let recentItem = NSMenuItem(title: "Recent", action: nil, keyEquivalent: "")
+            recentItem.isEnabled = false
+            menu.addItem(recentItem)
+        }
+        
+        menu.popUp(positioning: nil, at: NSPoint(x: location.x, y: location.y), in: nil)
+    }
 
     private func showPreview(for app: DockApp) {
         hidePreview()
         DispatchQueue.main.async {
-            let previewView = AppPreviewView(app: app)
+            let previewView = WindowsAppPreviewView(app: app)
             let hostingView = NSHostingView(rootView: previewView)
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 200, height: 150),
+                contentRect: NSRect(x: 0, y: 0, width: 250, height: 180),
                 styleMask: [.borderless],
                 backing: .buffered,
                 defer: false
@@ -131,20 +205,31 @@ struct DockContentView: View {
             window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 3)
             window.backgroundColor = .clear
             window.isOpaque = false
-            window.hasShadow = false
+            window.hasShadow = true
             window.ignoresMouseEvents = true
             window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
             window.contentView = hostingView
-            let mouseLocation = NSEvent.mouseLocation
-            let screen = NSScreen.main
-            let yCoord = screen != nil ? (screen!.frame.height - mouseLocation.y) : mouseLocation.y
-            let previewFrame = NSRect(
-                x: mouseLocation.x - 100,
-                y: yCoord + 50,
-                width: 200,
-                height: 150
-            )
-            window.setFrame(previewFrame, display: true)
+            
+            // Position above the icon
+            if let screen = NSScreen.main {
+                let mouseLocation = NSEvent.mouseLocation
+                let screenFrame = screen.frame
+                
+                let previewY: CGFloat
+                let previewX = mouseLocation.x - 125
+                
+                switch dockPosition {
+                case .bottom:
+                    previewY = 60
+                case .top:
+                    previewY = screenFrame.height - 240
+                case .left, .right:
+                    previewY = mouseLocation.y - 90
+                }
+                
+                window.setFrameOrigin(NSPoint(x: previewX, y: previewY))
+            }
+            
             window.orderFront(nil)
             self.previewWindow = window
             AppLogger.shared.info("Preview window shown for app: \(app.name)")
@@ -163,167 +248,443 @@ struct DockContentView: View {
     }
 }
 
-
-
-
-fileprivate func minimizeAllWindows() {
-    NSWorkspace.shared.hideOtherApplications()
-}
-
-fileprivate func closeAllWindows() {
-    let workspace = NSWorkspace.shared
-     let runningApps = workspace.runningApplications
-     
-     for app in runningApps {
-         if app.activationPolicy == .regular && app != NSRunningApplication.current {
-             if !app.terminate() {
-                 app.forceTerminate()
-             }
-         }
-     }
-}
-
-fileprivate func openSettings() {
-    if let appDelegate = NSApp.delegate as? AppDelegate {
-        appDelegate.openSettings()
-        AppLogger.shared.info("Settings opened from dock context menu")
-    }
-}
-
-fileprivate func lockScreen() {
-    do {
-        let task = Process()
-        task.launchPath = "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession"
-        task.arguments = ["-suspend"]
-        try task.run()
-        AppLogger.shared.info("Lock screen triggered from dock menu")
-    } catch {
-        AppLogger.shared.error("Error in lockScreen: \(error)")
-    }
-}
-
-fileprivate func openMonitor() {
-    if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.ActivityMonitor") {
-        let config = NSWorkspace.OpenConfiguration()
-        NSWorkspace.shared.openApplication(at: url, configuration: config, completionHandler: { _, error in
-            if let error = error {
-                AppLogger.shared.warn("Error opening Activity Monitor: \(error)")
-            } else {
-                AppLogger.shared.info("Activity Monitor opened from dock menu")
+// Windows 11 style taskbar background
+struct WindowsTaskbarBackground: View {
+    @Environment(\.colorScheme) var colorScheme
+    
+    var body: some View {
+        ZStack {
+            // Base layer with blur effect
+            Rectangle()
+                .fill(.ultraThinMaterial)
+            
+            // Acrylic-like overlay
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        gradient: Gradient(colors: [
+                            Color(white: colorScheme == .dark ? 0.15 : 0.95).opacity(0.8),
+                            Color(white: colorScheme == .dark ? 0.1 : 0.9).opacity(0.6)
+                        ]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            
+            // Top border highlight
+            VStack {
+                Rectangle()
+                    .fill(Color.white.opacity(0.1))
+                    .frame(height: 1)
+                Spacer()
             }
-        })
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 2)
     }
 }
 
-
-struct LauncherMenuIcon: View {
-    @State private var showMenu = false
+// Windows 11 style start button
+struct StartButton: View {
+    @Binding var showMenu: Bool
+    @State private var isHovered = false
+    
     var body: some View {
         Button(action: { showMenu.toggle() }) {
-            Image(systemName: "circle.grid.3x3.fill")
-                .resizable()
-                .frame(width: 28, height: 28)
+            Image(systemName: "square.grid.2x2.fill")
+                .font(.system(size: 18))
                 .foregroundColor(.white)
-                .padding(6)
-                .background(Color.gray.opacity(0.25))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .frame(width: 40, height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isHovered ? Color.white.opacity(0.15) : Color.clear)
+                )
         }
         .buttonStyle(PlainButtonStyle())
-        .popover(isPresented: $showMenu, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 8) {
-                Button("Lock Screen") { lockScreen() }
-                Button("Open Monitor") { openMonitor() }
-                Button("Minimize All Windows") { minimizeAllWindows() }
-                Button("Close All Windows") { closeAllWindows() }
-                Button("Settings...") { openSettings() }
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
             }
+        }
     }
 }
+
+// Windows 11 style search button
+struct SearchButton: View {
+    @State private var isHovered = false
+    
+    var body: some View {
+        Button(action: { 
+            // Open Spotlight search
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.spotlight")!)
+        }) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 16))
+                .foregroundColor(.white)
+                .frame(width: 40, height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isHovered ? Color.white.opacity(0.15) : Color.clear)
+                )
+        }
+        .buttonStyle(PlainButtonStyle())
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
+    }
 }
 
-struct DockAppView: View {
+// Task view button
+struct TaskViewButton: View {
+    @State private var isHovered = false
+    
+    var body: some View {
+        Button(action: { 
+            // Trigger Mission Control
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.exposelauncher") {
+                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+            } else {
+                // Fallback: Use key event
+                let src = CGEventSource(stateID: .hidSystemState)
+                let keyDown = CGEvent(keyboardEventSource: src, virtualKey: 0x7E, keyDown: true) // F3 key
+                let keyUp = CGEvent(keyboardEventSource: src, virtualKey: 0x7E, keyDown: false)
+                keyDown?.post(tap: .cghidEventTap)
+                keyUp?.post(tap: .cghidEventTap)
+            }
+        }) {
+            Image(systemName: "rectangle.3.group")
+                .font(.system(size: 16))
+                .foregroundColor(.white)
+                .frame(width: 40, height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isHovered ? Color.white.opacity(0.15) : Color.clear)
+                )
+        }
+        .buttonStyle(PlainButtonStyle())
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
+    }
+}
+
+// Windows 11 style taskbar icon
+struct WindowsTaskbarIcon: View {
     let app: DockApp
     let isHovered: Bool
     let iconSize: CGFloat
     let onTap: () -> Void
+    let onRightClick: (CGPoint) -> Void
+    
+    @State private var isPressed = false
     
     var body: some View {
         Button(action: onTap) {
-            ZStack {
-                // Background with Windows 11 style
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(backgroundFill)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(strokeColor, lineWidth: 1)
-                    )
-                    .frame(width: iconSize + 12, height: iconSize + 12)
-                    .scaleEffect(isHovered ? 1.1 : 1.0)
-                    .animation(.easeInOut(duration: 0.2), value: isHovered)
-                
-                // App icon
-                if let icon = app.icon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: iconSize, height: iconSize)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .scaleEffect(isHovered ? 1.05 : 1.0)
-                        .animation(.easeInOut(duration: 0.2), value: isHovered)
+            VStack(spacing: 0) {
+                ZStack {
+                    // Background
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(backgroundFill)
+                        .frame(width: 40, height: 40)
+                    
+                    // App icon
+                    if let icon = app.icon {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 24, height: 24)
+                    }
+                    
+                    // Multiple window indicator
+                    if app.windowCount > 1 {
+                        HStack(spacing: 2) {
+                            ForEach(0..<min(app.windowCount, 3), id: \.self) { _ in
+                                Rectangle()
+                                    .fill(Color.white)
+                                    .frame(width: 4, height: 2)
+                                    .cornerRadius(1)
+                            }
+                        }
+                        .offset(y: 23)
+                    }
                 }
                 
-                // Running indicator - Windows 11 style bottom line
+                // Running indicator
                 if app.isRunning {
                     Rectangle()
                         .fill(Color.white)
-                        .frame(width: iconSize * 0.6, height: 2)
-                        .cornerRadius(1)
-                        .offset(y: (iconSize + 12) / 2 + 2)
-                }
-                
-                // Badge for window count
-                if app.windowCount > 1 {
-                    Text("\(app.windowCount)")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(.white)
-                        .frame(width: 16, height: 16)
-                        .background(
-                            Circle()
-                                .fill(Color.red)
-                                .overlay(
-                                    Circle()
-                                        .stroke(Color.white, lineWidth: 1)
-                                )
-                        )
-                        .offset(x: (iconSize + 12) / 2 - 4, y: -(iconSize + 12) / 2 + 4)
+                        .frame(width: isHovered ? 30 : (app.windowCount > 0 ? 20 : 6), height: 3)
+                        .cornerRadius(1.5)
+                        .animation(.easeInOut(duration: 0.15), value: isHovered)
+                        .padding(.top, 2)
+                } else {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(width: 30, height: 3)
+                        .padding(.top, 2)
                 }
             }
         }
         .buttonStyle(PlainButtonStyle())
-        .frame(width: iconSize + 16, height: iconSize + 16)
-    }
-    
-    private var backgroundFill: some ShapeStyle {
-        if isHovered {
-            return AnyShapeStyle(.regularMaterial)
-        } else if app.isRunning {
-            return AnyShapeStyle(.thinMaterial)
-        } else {
-            return AnyShapeStyle(.clear)
+        .scaleEffect(isPressed ? 0.95 : 1.0)
+        .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity, pressing: { pressing in
+            withAnimation(.easeInOut(duration: 0.1)) {
+                isPressed = pressing
+            }
+        }, perform: {})
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded { _ in
+                if app.isRunning {
+                    // Open new window if supported
+                    onTap()
+                }
+            }
+        )
+        .contextMenu {
+            // This is a backup context menu for SwiftUI
+            AppContextMenu(app: app, appManager: AppManager())
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSView.rightMouseDownNotification)) { _ in
+            if let event = NSApp.currentEvent, event.type == .rightMouseDown {
+                let location = event.locationInWindow
+                onRightClick(location)
+            }
         }
     }
     
-    private var strokeColor: Color {
-        if isHovered {
-            return .white.opacity(0.3)
+    private var backgroundFill: some ShapeStyle {
+        if isPressed {
+            return AnyShapeStyle(Color.white.opacity(0.25))
+        } else if isHovered {
+            return AnyShapeStyle(Color.white.opacity(0.15))
         } else if app.isRunning {
-            return .white.opacity(0.15)
+            return AnyShapeStyle(Color.white.opacity(0.08))
         } else {
-            return .clear
+            return AnyShapeStyle(Color.clear)
         }
     }
 }
 
+// Windows style app preview
+struct WindowsAppPreviewView: View {
+    let app: DockApp
+    @Environment(\.colorScheme) var colorScheme
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Title bar
+            HStack {
+                if let icon = app.icon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 16, height: 16)
+                }
+                Text(app.name)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white)
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(0.1))
+            
+            // Preview area
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
+                .overlay(
+                    Text("Window Preview")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                )
+        }
+        .frame(width: 250, height: 180)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
+    }
+}
+
+// System tray view
+struct SystemTrayView: View {
+    @State private var currentTime = Date()
+    @State private var showNotificationCenter = false
+    
+    let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            // System icons
+            Button(action: {}) {
+                Image(systemName: "wifi")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white)
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            Button(action: {}) {
+                Image(systemName: "speaker.wave.2")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white)
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            Button(action: {}) {
+                Image(systemName: "battery.75")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white)
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            Rectangle()
+                .fill(Color.white.opacity(0.2))
+                .frame(width: 1, height: 20)
+            
+            // Date and time
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(currentTime, formatter: timeFormatter)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white)
+                Text(currentTime, formatter: dateFormatter)
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            .onReceive(timer) { _ in
+                currentTime = Date()
+            }
+            
+            // Notification center button
+            Button(action: { showNotificationCenter.toggle() }) {
+                Image(systemName: "message")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white)
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                )
+        )
+    }
+    
+    private var timeFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter
+    }
+    
+    private var dateFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M/d/yyyy"
+        return formatter
+    }
+}
+
+// Start menu view
+struct StartMenuView: View {
+    @State private var searchText = ""
+    @Environment(\.dismiss) var dismiss
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Search bar
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.gray)
+                TextField("Type here to search", text: $searchText)
+                    .textFieldStyle(PlainTextFieldStyle())
+            }
+            .padding(8)
+            .background(Color.gray.opacity(0.2))
+            .cornerRadius(6)
+            .padding()
+            
+            // Pinned apps
+            VStack(alignment: .leading) {
+                Text("Pinned")
+                    .font(.headline)
+                    .padding(.horizontal)
+                
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 80))], spacing: 10) {
+                    ForEach(["Finder", "Safari", "Mail", "Messages"], id: \.self) { appName in
+                        VStack {
+                            Image(systemName: "app.fill")
+                                .font(.system(size: 32))
+                                .foregroundColor(.blue)
+                            Text(appName)
+                                .font(.caption)
+                                .lineLimit(1)
+                        }
+                        .frame(width: 80, height: 80)
+                        .onTapGesture {
+                            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.\(appName.lowercased())") {
+                                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+                            }
+                            dismiss()
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+            
+            Spacer()
+            
+            // Power options
+            HStack {
+                Button(action: {
+                    if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.systempreferences") {
+                        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+                    }
+                    dismiss()
+                }) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 20))
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                Spacer()
+                
+                Button(action: {
+                    lockScreen()
+                    dismiss()
+                }) {
+                    Image(systemName: "lock")
+                        .font(.system(size: 20))
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                Button(action: {
+                    NSApplication.shared.terminate(nil)
+                }) {
+                    Image(systemName: "power")
+                        .font(.system(size: 20))
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+            .padding()
+        }
+        .frame(width: 400, height: 500)
+        .background(.regularMaterial)
+    }
+}
+
+// App context menu
 struct AppContextMenu: View {
     let app: DockApp
     let appManager: AppManager
@@ -353,11 +714,11 @@ struct AppContextMenu: View {
             Divider()
             
             if app.isPinned {
-                Button("Unpin from Dock") {
+                Button("Unpin from taskbar") {
                     appManager.unpinApp(app)
                 }
             } else {
-                Button("Pin to Dock") {
+                Button("Pin to taskbar") {
                     appManager.pinApp(app)
                 }
             }
@@ -365,89 +726,117 @@ struct AppContextMenu: View {
     }
 }
 
-struct DockContextMenu: View {
-    @AppStorage("dockPosition") private var dockPosition: DockPosition = .bottom
+// Menu handler for NSMenu actions
+@MainActor
+class AppMenuHandler: NSObject {
+    static let shared = AppMenuHandler()
+    private let appManager = AppManager()
     
-    var body: some View {
-        Group {
-            Button("Settings...") {
-                openSettings()
-            }
-            
-            Divider()
-            
-            Menu("Change Position") {
-                Button("Bottom") {
-                    dockPosition = .bottom
-                }
-                .disabled(dockPosition == .bottom)
-                
-                Button("Top") {
-                    dockPosition = .top
-                }
-                .disabled(dockPosition == .top)
-                
-                Button("Left") {
-                    dockPosition = .left
-                }
-                .disabled(dockPosition == .left)
-                
-                Button("Right") {
-                    dockPosition = .right
-                }
-                .disabled(dockPosition == .right)
-            }
-            
-            Divider()
-            
-            Button("Quit Win Dock") {
-                NSApplication.shared.terminate(nil)
+    @objc func showAllWindows(_ sender: NSMenuItem) {
+        if let app = sender.representedObject as? DockApp {
+            Task { @MainActor in
+                appManager.showAllWindows(for: app)
             }
         }
     }
     
-    private func openSettings() {
-        // Get the app delegate
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            appDelegate.openSettings()
+    @objc func hideApp(_ sender: NSMenuItem) {
+        if let app = sender.representedObject as? DockApp {
+            Task { @MainActor in
+                appManager.hideApp(app)
+            }
+        }
+    }
+    
+    @objc func quitApp(_ sender: NSMenuItem) {
+        if let app = sender.representedObject as? DockApp {
+            Task { @MainActor in
+                appManager.quitApp(app)
+            }
+        }
+    }
+    
+    @objc func openApp(_ sender: NSMenuItem) {
+        if let app = sender.representedObject as? DockApp {
+            Task { @MainActor in
+                appManager.launchApp(app)
+            }
+        }
+    }
+    
+    @objc func pinApp(_ sender: NSMenuItem) {
+        if let app = sender.representedObject as? DockApp {
+            Task { @MainActor in
+                appManager.pinApp(app)
+            }
+        }
+    }
+    
+    @objc func unpinApp(_ sender: NSMenuItem) {
+        if let app = sender.representedObject as? DockApp {
+            Task { @MainActor in
+                appManager.unpinApp(app)
+            }
         }
     }
 }
 
-struct AppPreviewView: View {
+// Drop delegate for drag and drop
+struct AppDropDelegate: DropDelegate {
     let app: DockApp
+    @Binding var apps: [DockApp]
+    @Binding var draggedApp: DockApp?
+    let appManager: AppManager
     
-    var body: some View {
-        VStack(spacing: 8) {
-            if let icon = app.icon {
-                Image(nsImage: icon)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 64, height: 64)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+    func performDrop(info: DropInfo) -> Bool {
+        guard let draggedApp = self.draggedApp else { return false }
+        
+        let fromIndex = apps.firstIndex(of: draggedApp)
+        let toIndex = apps.firstIndex(of: app)
+        
+        if let from = fromIndex, let to = toIndex, from != to {
+            withAnimation {
+                apps.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
             }
-            
-            Text(app.name)
-                .font(.headline)
-                .foregroundColor(.primary)
-            
-            if app.isRunning && app.windowCount > 0 {
-                Text("\(app.windowCount) window\(app.windowCount == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            Task { @MainActor in
+                appManager.saveDockAppOrder()
             }
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(.white.opacity(0.2), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 6)
-        )
-        .offset(y: -120)
+        
+        return true
     }
 }
 
+// Fixed lock screen function
+func lockScreen() {
+    let script = """
+    tell application "System Events"
+        keystroke "q" using {command down, control down}
+    end tell
+    """
+    
+    if let appleScript = NSAppleScript(source: script) {
+        var error: NSDictionary?
+        appleScript.executeAndReturnError(&error)
+        if let error = error {
+            AppLogger.shared.error("Lock screen error: \(error)")
+            // Fallback to screen saver
+            let task = Process()
+            task.launchPath = "/usr/bin/open"
+            task.arguments = ["-a", "ScreenSaverEngine"]
+            task.launch()
+        } else {
+            AppLogger.shared.info("Lock screen triggered successfully")
+        }
+    }
+}
+
+// NSView extension for right-click detection
+extension NSView {
+    static let rightMouseDownNotification = Notification.Name("NSViewRightMouseDown")
+    
+    open override func rightMouseDown(with event: NSEvent) {
+        NotificationCenter.default.post(name: NSView.rightMouseDownNotification, object: self)
+        super.rightMouseDown(with: event)
+    }
+}

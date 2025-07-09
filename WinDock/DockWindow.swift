@@ -13,6 +13,7 @@ class DockWindow: NSObject {
     @AppStorage("dockSize") private var dockSize: DockSize = .medium
     @AppStorage("autoHide") private var autoHide = false
     @AppStorage("showOnAllSpaces") private var showOnAllSpaces = true
+    @AppStorage("taskbarTransparency") private var taskbarTransparency = 0.8
     
     func show() {
         guard let screen = NSScreen.main else { return }
@@ -24,7 +25,7 @@ class DockWindow: NSObject {
             height: getDockHeight()
         )
         
-        window = NSWindow(
+        window = DockWindow.CustomWindow(
             contentRect: windowRect,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -33,16 +34,17 @@ class DockWindow: NSObject {
         
         guard let window = window else { return }
         
-        // Configure window properties - ensure it's always on top
-        window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 2)
+        // Configure window properties for Windows 11 style
+        window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.dockWindow)) + 1)
         window.backgroundColor = .clear
         window.isOpaque = false
         window.hasShadow = false
         window.ignoresMouseEvents = false
         window.canHide = false
+        window.acceptsMouseMovedEvents = true
         
         // Configure collection behavior based on settings
-        var collectionBehavior: NSWindow.CollectionBehavior = [.stationary, .ignoresCycle]
+        var collectionBehavior: NSWindow.CollectionBehavior = [.stationary, .ignoresCycle, .canJoinAllSpaces]
         if showOnAllSpaces {
             collectionBehavior.insert(.canJoinAllSpaces)
         }
@@ -77,9 +79,9 @@ class DockWindow: NSObject {
     private func getDockHeight() -> CGFloat {
         switch dockPosition {
         case .bottom, .top:
-            return dockSize.iconSize + 24 // Thinner padding for Windows 11 style
+            return 48 // Windows 11 taskbar height
         case .left, .right:
-            return 200 // Fixed height for vertical docks
+            return NSScreen.main?.frame.height ?? 600
         }
     }
     
@@ -88,7 +90,7 @@ class DockWindow: NSObject {
         case .bottom, .top:
             return screen.frame.width
         case .left, .right:
-            return dockSize.iconSize + 24 // Thinner padding for vertical docks
+            return 48 // Windows 11 taskbar width for vertical
         }
     }
     
@@ -111,6 +113,9 @@ class DockWindow: NSObject {
     @objc private func settingsDidChange() {
         // Update window configuration when settings change
         guard let window = window else { return }
+        
+        // Update transparency
+        window.alphaValue = CGFloat(taskbarTransparency)
         
         // Update collection behavior
         var collectionBehavior: NSWindow.CollectionBehavior = [.stationary, .ignoresCycle]
@@ -140,10 +145,11 @@ class DockWindow: NSObject {
         }
         
         if autoHide {
-            // Create tracking area for mouse enter/exit
+            // Create edge tracking area based on position
+            let edgeRect = getEdgeTrackingRect()
             trackingArea = NSTrackingArea(
-                rect: window.contentView?.bounds ?? .zero,
-                options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                rect: edgeRect,
+                options: [.mouseEnteredAndExited, .activeAlways],
                 owner: self,
                 userInfo: nil
             )
@@ -160,9 +166,25 @@ class DockWindow: NSObject {
         }
     }
     
+    private func getEdgeTrackingRect() -> NSRect {
+        guard let screen = NSScreen.main else { return .zero }
+        
+        // Create a thin tracking area at the edge of the screen
+        switch dockPosition {
+        case .bottom:
+            return NSRect(x: 0, y: 0, width: screen.frame.width, height: 5)
+        case .top:
+            return NSRect(x: 0, y: screen.frame.height - 5, width: screen.frame.width, height: 5)
+        case .left:
+            return NSRect(x: 0, y: 0, width: 5, height: screen.frame.height)
+        case .right:
+            return NSRect(x: screen.frame.width - 5, y: 0, width: 5, height: screen.frame.height)
+        }
+    }
+    
     private func startAutoHideTimer() {
         autoHideTimer?.invalidate()
-        autoHideTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+        autoHideTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
             self?.hideDock()
         }
     }
@@ -176,7 +198,7 @@ class DockWindow: NSObject {
         let hiddenFrame = getHiddenFrame()
         
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.3
+            context.duration = 0.2
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             window.animator().setFrame(hiddenFrame, display: true)
         }
@@ -191,7 +213,7 @@ class DockWindow: NSObject {
         let visibleFrame = getVisibleFrame()
         
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.3
+            context.duration = 0.2
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             window.animator().setFrame(visibleFrame, display: true)
         }
@@ -202,36 +224,36 @@ class DockWindow: NSObject {
         
         let dockHeight = getDockHeight()
         let dockWidth = getDockWidth(for: screen)
-        let hideOffset: CGFloat = 5 // Small visible area to trigger mouse enter
+        let hideOffset: CGFloat = 2 // Small visible area
         
         switch dockPosition {
         case .bottom:
             return NSRect(
-                x: screen.visibleFrame.minX,
-                y: screen.visibleFrame.minY - dockHeight + hideOffset,
-                width: screen.visibleFrame.width,
+                x: 0,
+                y: -dockHeight + hideOffset,
+                width: screen.frame.width,
                 height: dockHeight
             )
         case .top:
             return NSRect(
-                x: screen.visibleFrame.minX,
-                y: screen.visibleFrame.maxY - hideOffset,
-                width: screen.visibleFrame.width,
+                x: 0,
+                y: screen.frame.height - hideOffset,
+                width: screen.frame.width,
                 height: dockHeight
             )
         case .left:
             return NSRect(
-                x: screen.visibleFrame.minX - dockWidth + hideOffset,
-                y: screen.visibleFrame.minY,
+                x: -dockWidth + hideOffset,
+                y: 0,
                 width: dockWidth,
-                height: screen.visibleFrame.height
+                height: screen.frame.height
             )
         case .right:
             return NSRect(
-                x: screen.visibleFrame.maxX - hideOffset,
-                y: screen.visibleFrame.minY,
+                x: screen.frame.width - hideOffset,
+                y: 0,
                 width: dockWidth,
-                height: screen.visibleFrame.height
+                height: screen.frame.height
             )
         }
     }
@@ -245,31 +267,31 @@ class DockWindow: NSObject {
         switch dockPosition {
         case .bottom:
             return NSRect(
-                x: screen.visibleFrame.minX,
-                y: screen.visibleFrame.minY,
-                width: screen.visibleFrame.width,
+                x: 0,
+                y: 0,
+                width: screen.frame.width,
                 height: dockHeight
             )
         case .top:
             return NSRect(
-                x: screen.visibleFrame.minX,
-                y: screen.visibleFrame.maxY - dockHeight,
-                width: screen.visibleFrame.width,
+                x: 0,
+                y: screen.frame.height - dockHeight,
+                width: screen.frame.width,
                 height: dockHeight
             )
         case .left:
             return NSRect(
-                x: screen.visibleFrame.minX,
-                y: screen.visibleFrame.minY,
+                x: 0,
+                y: 0,
                 width: dockWidth,
-                height: screen.visibleFrame.height
+                height: screen.frame.height
             )
         case .right:
             return NSRect(
-                x: screen.visibleFrame.maxX - dockWidth,
-                y: screen.visibleFrame.minY,
+                x: screen.frame.width - dockWidth,
+                y: 0,
                 width: dockWidth,
-                height: screen.visibleFrame.height
+                height: screen.frame.height
             )
         }
     }
@@ -283,6 +305,20 @@ class DockWindow: NSObject {
     
     func mouseExited(with event: NSEvent) {
         if autoHide {
+            // Check if mouse is still within dock bounds
+            guard let window = window else { return }
+            let mouseLocation = NSEvent.mouseLocation
+            let windowFrame = window.frame
+            
+            if !NSPointInRect(mouseLocation, windowFrame) {
+                startAutoHideTimer()
+            }
+        }
+    }
+    
+    func resetAutoHideTimer() {
+        autoHideTimer?.invalidate()
+        if autoHide && !isHidden {
             startAutoHideTimer()
         }
     }
@@ -291,16 +327,53 @@ class DockWindow: NSObject {
         autoHideTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
     }
+    
+    // Custom window class to handle right-click events properly
+    class CustomWindow: NSWindow {
+        override func sendEvent(_ event: NSEvent) {
+            if event.type == .rightMouseDown {
+                // Pass right-click events to content view
+                if let contentView = contentView {
+                    // Convert to view coordinates
+                    let locationInView = contentView.convert(event.locationInWindow, from: nil)
+                    
+                    // Post notification for SwiftUI views to handle
+                    NotificationCenter.default.post(
+                        name: NSView.rightMouseDownNotification,
+                        object: contentView,
+                        userInfo: ["location": NSValue(point: locationInView)]
+                    )
+                    
+                    // Also pass to content view for normal handling
+                    contentView.rightMouseDown(with: event)
+                }
+            } else {
+                super.sendEvent(event)
+            }
+        }
+        
+        override var canBecomeKey: Bool {
+            return true
+        }
+        
+        override var canBecomeMain: Bool {
+            return false
+        }
+    }
 }
 
-// Custom NSHostingView that can track mouse events for auto-hide functionality
+// Enhanced NSHostingView with better mouse tracking
 class MouseTrackingHostingView<Content: View>: NSHostingView<Content> {
     weak var dockWindow: DockWindow?
+    private var trackingArea: NSTrackingArea?
     
     init(rootView: Content, dockWindow: DockWindow) {
         self.dockWindow = dockWindow
         super.init(rootView: rootView)
         setupTrackingArea()
+        
+        // Enable right-click events
+        self.window?.acceptsMouseMovedEvents = true
     }
     
     required init(rootView: Content) {
@@ -322,28 +395,35 @@ class MouseTrackingHostingView<Content: View>: NSHostingView<Content> {
         setupTrackingArea()
     }
     
-    override func rightMouseDown(with event: NSEvent) {
-        // Only handle right clicks for context menu - don't interfere with SwiftUI's normal handling
-        super.rightMouseDown(with: event)
-    }
+    // We don't need to override rightMouseDown here since the CustomWindow
+    // already handles it through sendEvent and passes it to us
     
     override func mouseDown(with event: NSEvent) {
-        // Let SwiftUI handle mouse events normally
+        // Handle normal clicks
         super.mouseDown(with: event)
+    }
+    
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        return true
     }
     
     private func setupTrackingArea() {
         // Remove existing tracking areas
-        trackingAreas.forEach { removeTrackingArea($0) }
+        if let trackingArea = trackingArea {
+            removeTrackingArea(trackingArea)
+        }
         
-        // Add new tracking area
-        let trackingArea = NSTrackingArea(
+        // Add new tracking area for the entire view
+        trackingArea = NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .mouseMoved],
             owner: self,
             userInfo: nil
         )
-        addTrackingArea(trackingArea)
+        
+        if let trackingArea = trackingArea {
+            addTrackingArea(trackingArea)
+        }
     }
     
     override func mouseEntered(with event: NSEvent) {
@@ -352,5 +432,12 @@ class MouseTrackingHostingView<Content: View>: NSHostingView<Content> {
     
     override func mouseExited(with event: NSEvent) {
         dockWindow?.mouseExited(with: event)
+    }
+    
+    override func mouseMoved(with event: NSEvent) {
+        // Track mouse movement for auto-hide
+        if let dockWindow = dockWindow {
+            dockWindow.resetAutoHideTimer()
+        }
     }
 }

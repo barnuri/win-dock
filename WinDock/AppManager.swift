@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Combine
+import Accessibility
 
 struct DockApp: Identifiable, Hashable {
     let id = UUID()
@@ -12,6 +13,7 @@ struct DockApp: Identifiable, Hashable {
     var isPinned: Bool
     var windowCount: Int
     var runningApplication: NSRunningApplication?
+    var windows: [WindowInfo] = []
     
     func hash(into hasher: inout Hasher) {
         hasher.combine(bundleIdentifier)
@@ -20,6 +22,14 @@ struct DockApp: Identifiable, Hashable {
     static func == (lhs: DockApp, rhs: DockApp) -> Bool {
         lhs.bundleIdentifier == rhs.bundleIdentifier
     }
+}
+
+struct WindowInfo {
+    let title: String
+    let windowID: CGWindowID
+    let bounds: CGRect
+    let isMinimized: Bool
+    let isOnScreen: Bool
 }
 
 @MainActor
@@ -31,28 +41,40 @@ class AppManager: ObservableObject {
     private let dockAppOrderKey = "WinDock.DockAppOrder"
     private var pinnedBundleIdentifiers: Set<String> = []
     private var dockAppOrder: [String] = []
+    private var accessibilityElement: AXUIElement?
 
-    // Default pinned applications
+    // Default pinned applications - Windows 11 style defaults
     private let defaultPinnedApps = [
-        "com.apple.finder",
-        "com.apple.Safari",
-        "com.apple.mail",
-        "com.apple.systempreferences",
-        "com.apple.ActivityMonitor"
+        "com.apple.finder",          // File Explorer equivalent
+        "com.apple.Safari",           // Edge equivalent
+        "com.apple.systempreferences", // Settings
+        "com.apple.mail",             // Mail
+        "com.apple.launchpad"         // Start menu equivalent
     ]
 
     init() {
         loadPinnedApps()
         loadDockAppOrder()
+        setupAccessibility()
         updateDockApps()
+    }
+    
+    private func setupAccessibility() {
+        // Request accessibility permissions if needed
+        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+        let accessEnabled = AXIsProcessTrustedWithOptions(options)
+        
+        if accessEnabled {
+            accessibilityElement = AXUIElementCreateSystemWide()
+        }
     }
     
     func startMonitoring() {
         // Update immediately
         updateDockApps()
         
-        // Set up periodic updates
-        appMonitorTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+        // Set up periodic updates with higher frequency for better responsiveness
+        appMonitorTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
             Task { @MainActor in
                 self.updateDockApps()
             }
@@ -70,6 +92,14 @@ class AppManager: ObservableObject {
             self,
             selector: #selector(appDidTerminate),
             name: NSWorkspace.didTerminateApplicationNotification,
+            object: nil
+        )
+        
+        // Listen for window changes
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(activeSpaceDidChange),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil
         )
     }
@@ -92,6 +122,12 @@ class AppManager: ObservableObject {
         }
     }
     
+    @objc private func activeSpaceDidChange(_ notification: Notification) {
+        Task { @MainActor in
+            updateDockApps()
+        }
+    }
+    
     private func updateDockApps() {
         let runningApps = NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
@@ -105,6 +141,9 @@ class AppManager: ObservableObject {
                   !processedBundleIds.contains(bundleId) else { continue }
 
             processedBundleIds.insert(bundleId)
+            
+            let windows = getWindowsForApp(app)
+            let windowCount = windows.filter { !$0.isMinimized }.count
 
             let dockApp = DockApp(
                 bundleIdentifier: bundleId,
@@ -113,8 +152,9 @@ class AppManager: ObservableObject {
                 url: app.bundleURL,
                 isRunning: true,
                 isPinned: pinnedBundleIdentifiers.contains(bundleId),
-                windowCount: getWindowCount(for: app),
-                runningApplication: app
+                windowCount: windowCount,
+                runningApplication: app,
+                windows: windows
             )
             newDockApps.append(dockApp)
         }
@@ -128,15 +168,21 @@ class AppManager: ObservableObject {
             }
         }
 
-        // Reorder newDockApps to match saved order, fallback to default order for new apps
+        // Reorder based on saved order
+        reorderApps(&newDockApps)
+
+        dockApps = newDockApps
+    }
+    
+    private func reorderApps(_ apps: inout [DockApp]) {
         if !dockAppOrder.isEmpty {
-            newDockApps.sort { lhs, rhs in
+            apps.sort { lhs, rhs in
                 let lidx = dockAppOrder.firstIndex(of: lhs.bundleIdentifier) ?? Int.max
                 let ridx = dockAppOrder.firstIndex(of: rhs.bundleIdentifier) ?? Int.max
                 if lidx != ridx {
                     return lidx < ridx
                 }
-                // fallback: pinned first, then name
+                // Fallback: pinned first, then by name
                 if lhs.isPinned && !rhs.isPinned {
                     return true
                 } else if !lhs.isPinned && rhs.isPinned {
@@ -146,8 +192,8 @@ class AppManager: ObservableObject {
                 }
             }
         } else {
-            // fallback: pinned first, then name
-            newDockApps.sort { lhs, rhs in
+            // Default ordering: pinned first, then by name
+            apps.sort { lhs, rhs in
                 if lhs.isPinned && !rhs.isPinned {
                     return true
                 } else if !lhs.isPinned && rhs.isPinned {
@@ -157,9 +203,47 @@ class AppManager: ObservableObject {
                 }
             }
         }
-
-        dockApps = newDockApps
     }
+    
+    private func getWindowsForApp(_ app: NSRunningApplication) -> [WindowInfo] {
+        var windows: [WindowInfo] = []
+        
+        // Use Core Graphics to get window information
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return windows
+        }
+        
+        for windowInfo in windowList {
+            guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
+                  ownerPID == app.processIdentifier else { continue }
+            
+            guard let windowID = windowInfo[kCGWindowNumber as String] as? CGWindowID,
+                  let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: Any],
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+            
+            let title = windowInfo[kCGWindowName as String] as? String ?? ""
+            let isOnScreen = windowInfo[kCGWindowIsOnscreen as String] as? Bool ?? false
+            let alpha = windowInfo[kCGWindowAlpha as String] as? CGFloat ?? 1.0
+            
+            // Skip windows that are likely not user-visible
+            if bounds.width < 50 || bounds.height < 50 || alpha < 0.1 {
+                continue
+            }
+            
+            let window = WindowInfo(
+                title: title,
+                windowID: windowID,
+                bounds: bounds,
+                isMinimized: !isOnScreen,
+                isOnScreen: isOnScreen
+            )
+            
+            windows.append(window)
+        }
+        
+        return windows
+    }
+    
     // MARK: - Dock App Order Persistence
 
     private func loadDockAppOrder() {
@@ -201,20 +285,19 @@ class AppManager: ObservableObject {
         )
     }
     
-    private func getWindowCount(for app: NSRunningApplication) -> Int {
-        // This is a simplified approach - in a real implementation,
-        // you'd use accessibility APIs or window server APIs
-        return 1
-    }
-    
     // MARK: - App Actions
     
     func activateApp(_ app: DockApp) {
         if let runningApp = app.runningApplication {
-            if #available(macOS 14.0, *) {
-                runningApp.activate()
+            // If app has multiple windows, cycle through them
+            if app.windowCount > 1 && runningApp.isActive {
+                cycleWindows(for: app)
             } else {
-                runningApp.activate(options: [.activateIgnoringOtherApps])
+                if #available(macOS 14.0, *) {
+                    runningApp.activate()
+                } else {
+                    runningApp.activate(options: [.activateIgnoringOtherApps])
+                }
             }
         } else if let appURL = app.url {
             let configuration = NSWorkspace.OpenConfiguration()
@@ -224,6 +307,27 @@ class AppManager: ObservableObject {
                 let configuration = NSWorkspace.OpenConfiguration()
                 NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
             }
+        }
+    }
+    
+    func cycleWindows(for app: DockApp) {
+        guard app.runningApplication != nil else { return }
+        
+        // Use AppleScript to cycle through windows
+        let script = """
+        tell application "System Events"
+            tell process "\(app.name)"
+                if (count of windows) > 1 then
+                    set frontmost to true
+                    click menu item "Cycle Through Windows" of menu "Window" of menu bar 1
+                end if
+            end tell
+        end tell
+        """
+        
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
         }
     }
     
@@ -249,13 +353,14 @@ class AppManager: ObservableObject {
                 runningApp.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
             }
             
-            // Additional method to ensure all windows are shown
+            // Show Exposé for this app
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                // Use AppleScript as a fallback to show all windows
                 let script = """
-                tell application "\(app.name)"
-                    activate
-                    set visible of every window to true
+                tell application "System Events"
+                    tell process "\(app.name)"
+                        set frontmost to true
+                    end tell
+                    key code 101 using {control down}
                 end tell
                 """
                 
@@ -269,6 +374,14 @@ class AppManager: ObservableObject {
     
     func launchApp(_ app: DockApp) {
         activateApp(app)
+    }
+    
+    func launchNewInstance(_ app: DockApp) {
+        if let appURL = app.url ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier) {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.createsNewApplicationInstance = true
+            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
+        }
     }
     
     func pinApp(_ app: DockApp) {
