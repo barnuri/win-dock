@@ -51,6 +51,9 @@ class AppManager: ObservableObject {
         "com.apple.mail",             // Mail
         "com.apple.launchpad"         // Start menu equivalent
     ]
+    
+    // Bundle ID for WinDock itself
+    private let winDockBundleID = Bundle.main.bundleIdentifier ?? "com.windock.app"
 
     init() {
         loadPinnedApps()
@@ -102,12 +105,16 @@ class AppManager: ObservableObject {
             name: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil
         )
+        
+        // Register screen insets for the dock
+        registerDockInsets()
     }
     
     func stopMonitoring() {
         appMonitorTimer?.invalidate()
         appMonitorTimer = nil
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        unregisterDockInsets()
     }
     
     @objc private func appDidLaunch(_ notification: Notification) {
@@ -130,7 +137,11 @@ class AppManager: ObservableObject {
     
     private func updateDockApps() {
         let runningApps = NSWorkspace.shared.runningApplications
-            .filter { $0.activationPolicy == .regular }
+            .filter { app in
+                // Filter out WinDock itself and only show regular apps
+                app.activationPolicy == .regular && 
+                app.bundleIdentifier != winDockBundleID
+            }
 
         var newDockApps: [DockApp] = []
         var processedBundleIds: Set<String> = []
@@ -348,7 +359,7 @@ class AppManager: ObservableObject {
             
             // Activate the app and show all windows
             if #available(macOS 14.0, *) {
-                runningApp.activate(options: [.activateAllWindows])
+                runningApp.activate()
             } else {
                 runningApp.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
             }
@@ -410,5 +421,18 @@ class AppManager: ObservableObject {
     
     private func savePinnedApps() {
         UserDefaults.standard.set(Array(pinnedBundleIdentifiers), forKey: pinnedAppsKey)
+    }
+    
+    // MARK: - Screen Insets for Dock
+    
+    private func registerDockInsets() {
+        // This would register the dock area with the window manager
+        // to prevent maximized windows from overlapping
+        // Note: This requires private APIs or system integration
+        AppLogger.shared.info("Registering dock insets")
+    }
+    
+    private func unregisterDockInsets() {
+        AppLogger.shared.info("Unregistering dock insets")
     }
 }

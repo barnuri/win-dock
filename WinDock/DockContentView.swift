@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Foundation
+import ScreenCaptureKit
 
 // Helper view for each app icon in the dock
 // Add preview at file scope
@@ -111,11 +112,18 @@ struct DockContentView: View {
                 isHovered: hoveredApp?.id == app.id,
                 iconSize: dockSize.iconSize,
                 onTap: {
-                    appManager.activateApp(app)
+                    if app.isRunning && app.runningApplication?.isActive == true {
+                        // Minimize if app is active
+                        appManager.hideApp(app)
+                    } else {
+                        // Activate app
+                        appManager.activateApp(app)
+                    }
                 },
                 onRightClick: { location in
                     showContextMenu(for: app, at: location)
-                }
+                },
+                appManager: appManager
             )
             .onHover { hovering in
                 if hovering {
@@ -132,9 +140,8 @@ struct DockContentView: View {
             }
             .onDrop(of: [.text], delegate: AppDropDelegate(
                 app: app,
-                apps: $appManager.dockApps,
-                draggedApp: $draggedApp,
-                appManager: appManager
+                appManager: appManager,
+                draggedApp: $draggedApp
             ))
         }
     }
@@ -143,10 +150,38 @@ struct DockContentView: View {
         let menu = NSMenu()
         
         if app.isRunning {
+            // Show windows preview option
+            let previewItem = NSMenuItem(title: "Show Windows Preview", action: #selector(AppMenuHandler.showWindowsPreview(_:)), keyEquivalent: "")
+            previewItem.representedObject = app
+            previewItem.target = AppMenuHandler.shared
+            menu.addItem(previewItem)
+            
             let showAllItem = NSMenuItem(title: "Show All Windows", action: #selector(AppMenuHandler.showAllWindows(_:)), keyEquivalent: "")
             showAllItem.representedObject = app
             showAllItem.target = AppMenuHandler.shared
             menu.addItem(showAllItem)
+            
+            // Add individual window items
+            if app.windows.count > 0 {
+                menu.addItem(NSMenuItem.separator())
+                for (index, window) in app.windows.enumerated() {
+                    let windowTitle = window.title.isEmpty ? "Window \(index + 1)" : window.title
+                    let windowItem = NSMenuItem(title: windowTitle, action: #selector(AppMenuHandler.focusWindow(_:)), keyEquivalent: "")
+                    windowItem.representedObject = WindowMenuInfo(app: app, windowID: window.windowID)
+                    windowItem.target = AppMenuHandler.shared
+                    menu.addItem(windowItem)
+                }
+                
+                menu.addItem(NSMenuItem.separator())
+                
+                // Close all windows option
+                let closeAllItem = NSMenuItem(title: "Close All Windows", action: #selector(AppMenuHandler.closeAllWindows(_:)), keyEquivalent: "")
+                closeAllItem.representedObject = app
+                closeAllItem.target = AppMenuHandler.shared
+                menu.addItem(closeAllItem)
+            }
+            
+            menu.addItem(NSMenuItem.separator())
             
             let hideItem = NSMenuItem(title: "Hide", action: #selector(AppMenuHandler.hideApp(_:)), keyEquivalent: "")
             hideItem.representedObject = app
@@ -172,11 +207,13 @@ struct DockContentView: View {
             let unpinItem = NSMenuItem(title: "Unpin from taskbar", action: #selector(AppMenuHandler.unpinApp(_:)), keyEquivalent: "")
             unpinItem.representedObject = app
             unpinItem.target = AppMenuHandler.shared
+            unpinItem.action = #selector(AppMenuHandler.unpinApp(_:))
             menu.addItem(unpinItem)
         } else {
             let pinItem = NSMenuItem(title: "Pin to taskbar", action: #selector(AppMenuHandler.pinApp(_:)), keyEquivalent: "")
             pinItem.representedObject = app
             pinItem.target = AppMenuHandler.shared
+            pinItem.action = #selector(AppMenuHandler.pinApp(_:))
             menu.addItem(pinItem)
         }
         
@@ -319,8 +356,21 @@ struct SearchButton: View {
     
     var body: some View {
         Button(action: { 
-            // Open Spotlight search
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.spotlight")!)
+            // Trigger Spotlight search with Command+Space
+            let src = CGEventSource(stateID: .hidSystemState)
+            let cmdDown = CGEvent(keyboardEventSource: src, virtualKey: 0x08, keyDown: true)
+            let cmdUp = CGEvent(keyboardEventSource: src, virtualKey: 0x08, keyDown: false)
+            let spaceDown = CGEvent(keyboardEventSource: src, virtualKey: 0x31, keyDown: true)
+            let spaceUp = CGEvent(keyboardEventSource: src, virtualKey: 0x31, keyDown: false)
+            
+            cmdDown?.flags = .maskCommand
+            spaceDown?.flags = .maskCommand
+            
+            let loc = CGEventTapLocation.cghidEventTap
+            cmdDown?.post(tap: loc)
+            spaceDown?.post(tap: loc)
+            spaceUp?.post(tap: loc)
+            cmdUp?.post(tap: loc)
         }) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 16))
@@ -346,17 +396,12 @@ struct TaskViewButton: View {
     
     var body: some View {
         Button(action: { 
-            // Trigger Mission Control
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.exposelauncher") {
-                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-            } else {
-                // Fallback: Use key event
-                let src = CGEventSource(stateID: .hidSystemState)
-                let keyDown = CGEvent(keyboardEventSource: src, virtualKey: 0x7E, keyDown: true) // F3 key
-                let keyUp = CGEvent(keyboardEventSource: src, virtualKey: 0x7E, keyDown: false)
-                keyDown?.post(tap: .cghidEventTap)
-                keyUp?.post(tap: .cghidEventTap)
-            }
+            // Trigger Mission Control (F3)
+            let src = CGEventSource(stateID: .hidSystemState)
+            let keyDown = CGEvent(keyboardEventSource: src, virtualKey: 0x63, keyDown: true) // F3 key
+            let keyUp = CGEvent(keyboardEventSource: src, virtualKey: 0x63, keyDown: false)
+            keyDown?.post(tap: .cghidEventTap)
+            keyUp?.post(tap: .cghidEventTap)
         }) {
             Image(systemName: "rectangle.3.group")
                 .font(.system(size: 16))
@@ -383,57 +428,64 @@ struct WindowsTaskbarIcon: View {
     let iconSize: CGFloat
     let onTap: () -> Void
     let onRightClick: (CGPoint) -> Void
+    let appManager: AppManager
     
     @State private var isPressed = false
     
     var body: some View {
-        Button(action: onTap) {
-            VStack(spacing: 0) {
-                ZStack {
-                    // Background
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(backgroundFill)
-                        .frame(width: 40, height: 40)
-                    
-                    // App icon
-                    if let icon = app.icon {
-                        Image(nsImage: icon)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 24, height: 24)
-                    }
-                    
-                    // Multiple window indicator
-                    if app.windowCount > 1 {
-                        HStack(spacing: 2) {
-                            ForEach(0..<min(app.windowCount, 3), id: \.self) { _ in
-                                Rectangle()
-                                    .fill(Color.white)
-                                    .frame(width: 4, height: 2)
-                                    .cornerRadius(1)
-                            }
-                        }
-                        .offset(y: 23)
-                    }
+        VStack(spacing: 0) {
+            ZStack {
+                // Background
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(backgroundFill)
+                    .frame(width: 40, height: 40)
+                
+                // App icon
+                if let icon = app.icon {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 24, height: 24)
                 }
                 
-                // Running indicator
-                if app.isRunning {
-                    Rectangle()
-                        .fill(Color.white)
-                        .frame(width: isHovered ? 30 : (app.windowCount > 0 ? 20 : 6), height: 3)
-                        .cornerRadius(1.5)
-                        .animation(.easeInOut(duration: 0.15), value: isHovered)
-                        .padding(.top, 2)
-                } else {
-                    Rectangle()
-                        .fill(Color.clear)
-                        .frame(width: 30, height: 3)
-                        .padding(.top, 2)
+                // Multiple window indicator
+                if app.windowCount > 1 {
+                    HStack(spacing: 2) {
+                        ForEach(0..<min(app.windowCount, 3), id: \.self) { _ in
+                            Rectangle()
+                                .fill(Color.white)
+                                .frame(width: 4, height: 2)
+                                .cornerRadius(1)
+                        }
+                    }
+                    .offset(y: 23)
                 }
             }
+            
+            // Running indicator
+            if app.isRunning {
+                Rectangle()
+                    .fill(Color.white)
+                    .frame(width: isHovered ? 30 : (app.windowCount > 0 ? 20 : 6), height: 3)
+                    .cornerRadius(1.5)
+                    .animation(.easeInOut(duration: 0.15), value: isHovered)
+                    .padding(.top, 2)
+            } else {
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: 30, height: 3)
+                    .padding(.top, 2)
+            }
         }
-        .buttonStyle(PlainButtonStyle())
+        .frame(width: 40, height: 50)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onTap()
+        }
+        .contextMenu {
+            // SwiftUI native context menu
+            AppContextMenuView(app: app, appManager: appManager)
+        }
         .scaleEffect(isPressed ? 0.95 : 1.0)
         .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity, pressing: { pressing in
             withAnimation(.easeInOut(duration: 0.1)) {
@@ -443,21 +495,11 @@ struct WindowsTaskbarIcon: View {
         .simultaneousGesture(
             TapGesture(count: 2).onEnded { _ in
                 if app.isRunning {
-                    // Open new window if supported
-                    onTap()
+                    // Launch new instance
+                    appManager.launchNewInstance(app)
                 }
             }
         )
-        .contextMenu {
-            // This is a backup context menu for SwiftUI
-            AppContextMenu(app: app, appManager: AppManager())
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSView.rightMouseDownNotification)) { _ in
-            if let event = NSApp.currentEvent, event.type == .rightMouseDown {
-                let location = event.locationInWindow
-                onRightClick(location)
-            }
-        }
     }
     
     private var backgroundFill: some ShapeStyle {
@@ -585,7 +627,7 @@ struct SystemTrayView: View {
     
     private var timeFormatter: DateFormatter {
         let formatter = DateFormatter()
-        formatter.timeStyle = .short
+        formatter.dateFormat = "HH:mm"
         return formatter
     }
     
@@ -684,23 +726,44 @@ struct StartMenuView: View {
     }
 }
 
-// App context menu
-struct AppContextMenu: View {
+// App context menu view for SwiftUI
+struct AppContextMenuView: View {
     let app: DockApp
     let appManager: AppManager
     
     var body: some View {
         Group {
             if app.isRunning {
+                Button("Show Windows Preview") {
+                    AppMenuHandler.shared.appManager = appManager
+                    AppMenuHandler.shared.showWindowsPreviewPanel(for: app)
+                }
+                
                 Button("Show All Windows") {
                     appManager.showAllWindows(for: app)
                 }
                 
-                Button("Hide") {
-                    appManager.hideApp(app)
+                if app.windows.count > 0 {
+                    Divider()
+                    
+                    ForEach(Array(app.windows.enumerated()), id: \.element.windowID) { index, window in
+                        Button(window.title.isEmpty ? "Window \(index + 1)" : window.title) {
+                            AppMenuHandler.shared.focusSpecificWindow(windowID: window.windowID, app: app)
+                        }
+                    }
+                    
+                    Divider()
+                    
+                    Button("Close All Windows") {
+                        AppMenuHandler.shared.closeAllWindowsForApp(app)
+                    }
                 }
                 
                 Divider()
+                
+                Button("Hide") {
+                    appManager.hideApp(app)
+                }
                 
                 Button("Quit") {
                     appManager.quitApp(app)
@@ -726,16 +789,46 @@ struct AppContextMenu: View {
     }
 }
 
+// Helper struct for window menu items
+struct WindowMenuInfo {
+    let app: DockApp
+    let windowID: CGWindowID
+}
+
 // Menu handler for NSMenu actions
 @MainActor
 class AppMenuHandler: NSObject {
     static let shared = AppMenuHandler()
-    private let appManager = AppManager()
+    var appManager: AppManager?
+    
+    @objc func showWindowsPreview(_ sender: NSMenuItem) {
+        if let app = sender.representedObject as? DockApp {
+            Task { @MainActor in
+                showWindowsPreviewPanel(for: app)
+            }
+        }
+    }
     
     @objc func showAllWindows(_ sender: NSMenuItem) {
         if let app = sender.representedObject as? DockApp {
             Task { @MainActor in
-                appManager.showAllWindows(for: app)
+                appManager?.showAllWindows(for: app)
+            }
+        }
+    }
+    
+    @objc func focusWindow(_ sender: NSMenuItem) {
+        if let info = sender.representedObject as? WindowMenuInfo {
+            Task { @MainActor in
+                focusSpecificWindow(windowID: info.windowID, app: info.app)
+            }
+        }
+    }
+    
+    @objc func closeAllWindows(_ sender: NSMenuItem) {
+        if let app = sender.representedObject as? DockApp {
+            Task { @MainActor in
+                closeAllWindowsForApp(app)
             }
         }
     }
@@ -743,7 +836,7 @@ class AppMenuHandler: NSObject {
     @objc func hideApp(_ sender: NSMenuItem) {
         if let app = sender.representedObject as? DockApp {
             Task { @MainActor in
-                appManager.hideApp(app)
+                appManager?.hideApp(app)
             }
         }
     }
@@ -751,7 +844,7 @@ class AppMenuHandler: NSObject {
     @objc func quitApp(_ sender: NSMenuItem) {
         if let app = sender.representedObject as? DockApp {
             Task { @MainActor in
-                appManager.quitApp(app)
+                appManager?.quitApp(app)
             }
         }
     }
@@ -759,7 +852,7 @@ class AppMenuHandler: NSObject {
     @objc func openApp(_ sender: NSMenuItem) {
         if let app = sender.representedObject as? DockApp {
             Task { @MainActor in
-                appManager.launchApp(app)
+                appManager?.launchApp(app)
             }
         }
     }
@@ -767,7 +860,7 @@ class AppMenuHandler: NSObject {
     @objc func pinApp(_ sender: NSMenuItem) {
         if let app = sender.representedObject as? DockApp {
             Task { @MainActor in
-                appManager.pinApp(app)
+                appManager?.pinApp(app)
             }
         }
     }
@@ -775,8 +868,73 @@ class AppMenuHandler: NSObject {
     @objc func unpinApp(_ sender: NSMenuItem) {
         if let app = sender.representedObject as? DockApp {
             Task { @MainActor in
-                appManager.unpinApp(app)
+                appManager?.unpinApp(app)
             }
+        }
+    }
+    
+    func showWindowsPreviewPanel(for app: DockApp) {
+        let previewWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        
+        previewWindow.title = "\(app.name) - Windows Preview"
+        previewWindow.center()
+        
+        let previewView = WindowsPreviewGridView(app: app, appManager: appManager ?? AppManager())
+        let hostingView = NSHostingView(rootView: previewView)
+        previewWindow.contentView = hostingView
+        
+        previewWindow.makeKeyAndOrderFront(nil)
+    }
+    
+    func focusSpecificWindow(windowID: CGWindowID, app: DockApp) {
+        if let runningApp = app.runningApplication {
+            if #available(macOS 14.0, *) {
+                runningApp.activate()
+            } else {
+                runningApp.activate(options: [.activateIgnoringOtherApps])
+            }
+            
+            // Use accessibility API to focus the specific window
+            let axApp = AXUIElementCreateApplication(runningApp.processIdentifier)
+            var windows: CFTypeRef?
+            AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windows)
+            
+            if let windowArray = windows as? [AXUIElement] {
+                for window in windowArray {
+                    var windowIDRef: CFTypeRef?
+                    AXUIElementCopyAttributeValue(window, "_AXWindowNumber" as CFString, &windowIDRef)
+                    
+                    if let windowNumber = windowIDRef as? Int, windowNumber == windowID {
+                        AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                        break
+                    }
+                }
+            }
+        }
+    }
+    
+    func closeAllWindowsForApp(_ app: DockApp) {
+        guard app.runningApplication != nil else { return }
+        
+        let script = """
+        tell application "System Events"
+            tell process "\(app.name)"
+                set windowList to every window
+                repeat with aWindow in windowList
+                    click button 1 of aWindow
+                end repeat
+            end tell
+        end tell
+        """
+        
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
         }
     }
 }
@@ -784,26 +942,36 @@ class AppMenuHandler: NSObject {
 // Drop delegate for drag and drop
 struct AppDropDelegate: DropDelegate {
     let app: DockApp
-    @Binding var apps: [DockApp]
-    @Binding var draggedApp: DockApp?
     let appManager: AppManager
+    @Binding var draggedApp: DockApp?
     
     func performDrop(info: DropInfo) -> Bool {
         guard let draggedApp = self.draggedApp else { return false }
         
+        var apps = appManager.dockApps
         let fromIndex = apps.firstIndex(of: draggedApp)
         let toIndex = apps.firstIndex(of: app)
         
         if let from = fromIndex, let to = toIndex, from != to {
             withAnimation {
                 apps.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+                appManager.dockApps = apps
             }
             Task { @MainActor in
                 appManager.saveDockAppOrder()
             }
         }
         
+        self.draggedApp = nil
         return true
+    }
+    
+    func dropEntered(info: DropInfo) {
+        // Optional: Add visual feedback
+    }
+    
+    func dropExited(info: DropInfo) {
+        // Optional: Remove visual feedback
     }
 }
 
@@ -831,12 +999,198 @@ func lockScreen() {
     }
 }
 
-// NSView extension for right-click detection
-extension NSView {
-    static let rightMouseDownNotification = Notification.Name("NSViewRightMouseDown")
+// Windows preview grid view
+struct WindowsPreviewGridView: View {
+    let app: DockApp
+    let appManager: AppManager
+    @Environment(\.dismiss) var dismiss
     
-    open override func rightMouseDown(with event: NSEvent) {
-        NotificationCenter.default.post(name: NSView.rightMouseDownNotification, object: self)
-        super.rightMouseDown(with: event)
+    var body: some View {
+        VStack {
+            Text("\(app.name) - \(app.windows.count) Window\(app.windows.count == 1 ? "" : "s")")
+                .font(.headline)
+                .padding()
+            
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 250))], spacing: 20) {
+                    ForEach(Array(app.windows.enumerated()), id: \.element.windowID) { index, window in
+                        WindowPreviewTile(
+                            window: window,
+                            app: app,
+                            index: index,
+                            onTap: {
+                                AppMenuHandler.shared.focusSpecificWindow(windowID: window.windowID, app: app)
+                                dismiss()
+                            },
+                            onClose: {
+                                closeWindow(window: window, app: app)
+                            }
+                        )
+                    }
+                }
+                .padding()
+            }
+            
+            HStack {
+                Button("Close All") {
+                    AppMenuHandler.shared.closeAllWindowsForApp(app)
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+                
+                Spacer()
+                
+                Button("Done") {
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
+        }
+        .frame(minWidth: 600, minHeight: 400)
+    }
+    
+    private func closeWindow(window: WindowInfo, app: DockApp) {
+        guard let runningApp = app.runningApplication else { return }
+        
+        let axApp = AXUIElementCreateApplication(runningApp.processIdentifier)
+        var windows: CFTypeRef?
+        AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windows)
+        
+        if let windowArray = windows as? [AXUIElement] {
+            for axWindow in windowArray {
+                var windowIDRef: CFTypeRef?
+                AXUIElementCopyAttributeValue(axWindow, "_AXWindowNumber" as CFString, &windowIDRef)
+                
+                if let windowNumber = windowIDRef as? Int, windowNumber == window.windowID {
+                    var closeButton: CFTypeRef?
+                    AXUIElementCopyAttributeValue(axWindow, kAXCloseButtonAttribute as CFString, &closeButton)
+                    if let button = closeButton {
+                        AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+                    }
+                    break
+                }
+            }
+        }
+    }
+}
+
+// Window preview tile
+struct WindowPreviewTile: View {
+    let window: WindowInfo
+    let app: DockApp
+    let index: Int
+    let onTap: () -> Void
+    let onClose: () -> Void
+    @State private var isHovered = false
+    @State private var thumbnailImage: NSImage?
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Window content preview
+            ZStack {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.2))
+                    .frame(height: 150)
+                
+                if let image = thumbnailImage {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(height: 150)
+                } else {
+                    VStack {
+                        Image(systemName: "rectangle.dashed")
+                            .font(.system(size: 40))
+                            .foregroundColor(.gray)
+                        Text("Window \(index + 1)")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                }
+                
+                // Close button overlay
+                if isHovered {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button(action: onClose) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 20))
+                                    .foregroundColor(.white)
+                                    .background(Circle().fill(Color.red))
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .padding(8)
+                        }
+                        Spacer()
+                    }
+                }
+            }
+            
+            // Window title
+            Text(window.title.isEmpty ? "Window \(index + 1)" : window.title)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity)
+                .background(Color.gray.opacity(0.1))
+        }
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isHovered ? Color.blue : Color.gray.opacity(0.3), lineWidth: 2)
+        )
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .onTapGesture {
+            onTap()
+        }
+        .onAppear {
+            captureWindowThumbnail()
+        }
+    }
+    
+    private func captureWindowThumbnail() {
+        // Use ScreenCaptureKit for window thumbnails
+        Task {
+            if #available(macOS 13.0, *) {
+                await captureWithScreenCaptureKit()
+            }
+        }
+    }
+    
+    @available(macOS 13.0, *)
+    private func captureWithScreenCaptureKit() async {
+        do {
+            let content = try await SCShareableContent.current
+            
+            // Find the window in shareable content
+            guard let scWindow = content.windows.first(where: { $0.windowID == window.windowID }) else {
+                return
+            }
+            
+            // Create content filter for the specific window
+            let filter = SCContentFilter(desktopIndependentWindow: scWindow)
+            
+            // Create configuration
+            let config = SCStreamConfiguration()
+            config.width = Int(window.bounds.width)
+            config.height = Int(window.bounds.height)
+            config.scalesToFit = true
+            
+            // Capture a single frame
+            if let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) {
+                DispatchQueue.main.async {
+                    self.thumbnailImage = NSImage(cgImage: image, size: window.bounds.size)
+                }
+            }
+        } catch {
+            AppLogger.shared.error("Failed to capture window thumbnail: \(error)")
+        }
     }
 }
