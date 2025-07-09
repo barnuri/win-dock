@@ -83,15 +83,7 @@ jobs:
         plutil -replace CFBundleVersion -string "$NEW_VERSION" WinDock/Info.plist
         
         echo "Updated Info.plist with version $NEW_VERSION"
-    
-    - name: Commit version bump
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add WinDock/Info.plist
-        git commit -m "Bump version to ${{ steps.new_version.outputs.new_version }}"
-        git push
-    
+       
     - name: Build app
       run: |
         echo "Building WinDock..."
@@ -136,6 +128,14 @@ jobs:
         cd ../../../../
         echo "Created DMG: $DMG_NAME"
         ls -la WinDock-*.dmg
+
+    - name: Commit version bump
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add WinDock/Info.plist
+        git commit -m "Bump version to ${{ steps.new_version.outputs.new_version }}"
+        git push
     
     - name: Create release tag
       id: create_tag
