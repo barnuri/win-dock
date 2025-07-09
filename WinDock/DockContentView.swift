@@ -167,30 +167,20 @@ struct DockContentView: View {
 
 
 fileprivate func minimizeAllWindows() {
-    // Only works for Finder windows
-    let script = "tell application \"Finder\" to set collapsed of every window to true"
-    if let appleScript = NSAppleScript(source: script) {
-        var errorDict: NSDictionary? = nil
-        appleScript.executeAndReturnError(&errorDict)
-        if let errorDict = errorDict {
-            AppLogger.shared.warn("AppleScript error in minimizeAllWindows: \(errorDict)")
-        } else {
-            AppLogger.shared.info("All Finder windows minimized via AppleScript")
-        }
-    }
+    NSWorkspace.shared.hideOtherApplications()
 }
 
 fileprivate func closeAllWindows() {
-    let script = "tell application \"System Events\" to keystroke 'w' using {command down, option down}"
-    if let appleScript = NSAppleScript(source: script) {
-        var errorDict: NSDictionary? = nil
-        appleScript.executeAndReturnError(&errorDict)
-        if let errorDict = errorDict {
-            AppLogger.shared.warn("AppleScript error in closeAllWindows: \(errorDict)")
-        } else {
-            AppLogger.shared.info("All windows closed via AppleScript")
-        }
-    }
+    let workspace = NSWorkspace.shared
+     let runningApps = workspace.runningApplications
+     
+     for app in runningApps {
+         if app.activationPolicy == .regular && app != NSRunningApplication.current {
+             if !app.terminate() {
+                 app.forceTerminate()
+             }
+         }
+     }
 }
 
 fileprivate func openSettings() {
