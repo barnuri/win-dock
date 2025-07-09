@@ -237,6 +237,7 @@ struct AppsSettingsView: View {
                         Text("Terminal").tag("com.apple.Terminal")
                         Text("iTerm").tag("com.googlecode.iterm2")
                         Text("Warp").tag("dev.warp.Warp")
+                        Text("Kitty").tag("com.kittty.Kitty")
                     }
                 }
                 
