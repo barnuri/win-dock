@@ -330,28 +330,13 @@ class MouseTrackingHostingView<Content: View>: NSHostingView<Content> {
     }
     
     override func rightMouseDown(with event: NSEvent) {
-        // Show menu bar when right clicking empty space
-        activateAppTemporarily()
+        // Only handle right clicks for context menu - don't interfere with SwiftUI's normal handling
         super.rightMouseDown(with: event)
     }
     
     override func mouseDown(with event: NSEvent) {
-        // Activate app on left click too
-        if event.clickCount == 1 {
-            activateAppTemporarily()
-        }
+        // Let SwiftUI handle mouse events normally
         super.mouseDown(with: event)
-    }
-    
-    private func activateAppTemporarily() {
-        // Temporarily activate the app to show menu bar
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        
-        // Return to accessory mode after a short delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            NSApp.setActivationPolicy(.accessory)
-        }
     }
     
     private func setupTrackingArea() {

@@ -9,6 +9,11 @@ import SwiftUI
 import AppKit
 
 struct DockContentView: View {
+    private func openSettings() {
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.openSettings()
+        }
+    }
     @StateObject private var appManager = AppManager()
     @State private var hoveredApp: DockApp?
     @State private var showingPreview = false
@@ -25,34 +30,48 @@ struct DockContentView: View {
     
     var body: some View {
         let isVertical = dockPosition == .left || dockPosition == .right
-        
-        Group {
-            if isVertical {
-                VStack(spacing: 8) {
-                    ForEach(appManager.dockApps, id: \.id) { app in
-                        createAppView(for: app)
+
+        GeometryReader { geometry in
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer(minLength: 0)
+                    Group {
+                        if isVertical {
+                            VStack(spacing: 8) {
+                                LauncherMenuIcon()
+                                ReorderableForEach(apps: $appManager.dockApps) { app in
+                                    createAppView(for: app)
+                                }
+                            }
+                        } else {
+                            HStack(spacing: 8) {
+                                LauncherMenuIcon()
+                                ReorderableForEach(apps: $appManager.dockApps) { app in
+                                    createAppView(for: app)
+                                }
+                            }
+                        }
                     }
-                }
-            } else {
-                HStack(spacing: 8) {
-                    ForEach(appManager.dockApps, id: \.id) { app in
-                        createAppView(for: app)
-                    }
+                    .padding(isVertical ? .vertical : .horizontal, 8)
+                    .padding(isVertical ? .horizontal : .vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.black.opacity(0.85))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            )
+                            .shadow(color: .black.opacity(0.35), radius: 16, x: 0, y: 6)
+                    )
+                    .frame(maxWidth: geometry.size.width * 0.98)
+                    .frame(height: 64)
+                    .padding(.bottom, 8)
+                    Spacer(minLength: 0)
                 }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottom)
         }
-        .padding(isVertical ? .vertical : .horizontal, 8)
-        .padding(isVertical ? .horizontal : .vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(.thinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(.white.opacity(0.2), lineWidth: 0.5)
-                )
-                .shadow(color: .black.opacity(0.2), radius: 12, x: 0, y: 4)
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)
         .contextMenu {
             DockContextMenu()
@@ -65,6 +84,109 @@ struct DockContentView: View {
             hidePreview()
         }
     }
+
+// MARK: - End of DockContentView
+
+
+// MARK: - Drag-and-drop helpers (outside DockContentView)
+struct ReorderableForEach<App: Identifiable & Equatable, Content: View>: View {
+    @Binding var apps: [App]
+    let content: (App) -> Content
+
+    @State private var dragging: App?
+
+    var body: some View {
+        ForEach(apps) { app in
+            content(app)
+                .onDrag {
+                    self.dragging = app
+                    return NSItemProvider(object: String(describing: app.id) as NSString)
+                }
+                .onDrop(of: [.text], delegate: AppDropDelegate(item: app, apps: $apps, dragging: $dragging))
+        }
+    }
+}
+
+struct AppDropDelegate<App: Identifiable & Equatable>: DropDelegate {
+    let item: App
+    @Binding var apps: [App]
+    @Binding var dragging: App?
+
+    func performDrop(info: DropInfo) -> Bool {
+        self.dragging = nil
+        // Save the new order after drop (for DockApp only)
+        if let dockApps = apps as? Binding<[DockApp]> {
+            AppManager().saveDockAppOrder()
+        }
+        return true
+    }
+// MARK: - LauncherMenuIcon (uBar-style left icon with menu)
+struct LauncherMenuIcon: View {
+    @State private var showMenu = false
+
+    var body: some View {
+        Button(action: { showMenu.toggle() }) {
+            Image(systemName: "circle.grid.3x3.fill")
+                .resizable()
+                .frame(width: 28, height: 28)
+                .foregroundColor(.white)
+                .padding(6)
+                .background(Color.gray.opacity(0.25))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        LauncherMenuIcon()
+        .buttonStyle(PlainButtonStyle())
+        .popover(isPresented: $showMenu, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Button("Lock Screen") { lockScreen() }
+                Button("Open Monitor") { openMonitor() }
+                Button("Minimize All Windows") { minimizeAllWindows() }
+                Button("Close All Windows") { closeAllWindows() }
+                                        LauncherMenuIcon()
+                Button("Settings...") { openSettings() }
+                Button("Quit Win Dock") { NSApplication.shared.terminate(nil) }
+            }
+            .padding(12)
+            .frame(width: 180)
+        }
+    }
+
+    private func lockScreen() {
+        let task = Process()
+        task.launchPath = "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession"
+        task.arguments = ["-suspend"]
+        try? task.run()
+    }
+    private func openMonitor() {
+        NSWorkspace.shared.launchApplication("Activity Monitor")
+    }
+    private func minimizeAllWindows() {
+        let script = "tell application \"System Events\" to keystroke 'm' using {command down, option down}"
+        if let appleScript = NSAppleScript(source: script) {
+            appleScript.executeAndReturnError(nil)
+        }
+    }
+    private func closeAllWindows() {
+        let script = "tell application \"System Events\" to keystroke 'w' using {command down, option down}"
+        if let appleScript = NSAppleScript(source: script) {
+            appleScript.executeAndReturnError(nil)
+        }
+    }
+    private func openSettings() {
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.openSettings()
+        }
+    }
+}
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging = dragging, dragging != item,
+              let from = apps.firstIndex(of: dragging),
+              let to = apps.firstIndex(of: item) else { return }
+        withAnimation {
+            apps.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        }
+    }
+}
     
     private func showPreview(for app: DockApp) {
         hidePreview() // Hide any existing preview

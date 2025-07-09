@@ -178,18 +178,46 @@ jobs:
         echo "$RELEASE_NOTES" > release_notes.md
         echo "Generated release notes"
     
-    - name: Create GitHub release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ steps.create_tag.outputs.tag_name }}
-        name: WinDock ${{ steps.new_version.outputs.new_version }}
-        body_path: release_notes.md
-        files: |
-          WinDock-${{ steps.new_version.outputs.new_version }}.dmg
-        draft: false
-        prerelease: false
+    - name: Upload .app for release
+      run: |
+        # Copy the .app bundle to the root for upload
+        cp -R build/Build/Products/Release/WinDock.app ./
+        echo "Copied WinDock.app to root directory"
+
+    - name: Create GitHub release with gh CLI
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        TAG_NAME="${{ steps.create_tag.outputs.tag_name }}"
+        RELEASE_NAME="WinDock ${{ steps.new_version.outputs.new_version }}"
+        BODY_PATH="release_notes.md"
+        DMG_FILE="WinDock-${{ steps.new_version.outputs.new_version }}.dmg"
+        APP_FILE="WinDock.app"
+
+        # Check if release already exists
+        if gh release view "$TAG_NAME" > /dev/null 2>&1; then
+          echo "Release $TAG_NAME already exists, updating..."
+          gh release edit "$TAG_NAME" \
+            --title "$RELEASE_NAME" \
+            --notes-file "$BODY_PATH"
+        else
+          echo "Creating new release $TAG_NAME..."
+          gh release create "$TAG_NAME" \
+            "$DMG_FILE" "$APP_FILE" \
+            --title "$RELEASE_NAME" \
+            --notes-file "$BODY_PATH" \
+            --verify-tag
+        fi
+
+        # Upload assets if not already present
+        for asset in "$DMG_FILE" "$APP_FILE"; do
+          if ! gh release view "$TAG_NAME" --json assets | grep -q "$asset"; then
+            echo "Uploading $asset to release $TAG_NAME..."
+            gh release upload "$TAG_NAME" "$asset" --clobber
+          else
+            echo "$asset already uploaded."
+          fi
+        done
     
     - name: Clean up
       run: |

@@ -32,11 +32,13 @@ struct DockApp: Identifiable, Hashable {
 @MainActor
 class AppManager: ObservableObject {
     @Published var dockApps: [DockApp] = []
-    
+
     private var appMonitorTimer: Timer?
     private let pinnedAppsKey = "WinDock.PinnedApps"
+    private let dockAppOrderKey = "WinDock.DockAppOrder"
     private var pinnedBundleIdentifiers: Set<String> = []
-    
+    private var dockAppOrder: [String] = []
+
     // Default pinned applications
     private let defaultPinnedApps = [
         "com.apple.finder",
@@ -45,9 +47,10 @@ class AppManager: ObservableObject {
         "com.apple.systempreferences",
         "com.apple.ActivityMonitor"
     ]
-    
+
     init() {
         loadPinnedApps()
+        loadDockAppOrder()
         updateDockApps()
     }
     
@@ -99,17 +102,17 @@ class AppManager: ObservableObject {
     private func updateDockApps() {
         let runningApps = NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
-        
+
         var newDockApps: [DockApp] = []
         var processedBundleIds: Set<String> = []
-        
+
         // Add running applications
         for app in runningApps {
             guard let bundleId = app.bundleIdentifier,
                   !processedBundleIds.contains(bundleId) else { continue }
-            
+
             processedBundleIds.insert(bundleId)
-            
+
             let dockApp = DockApp(
                 bundleIdentifier: bundleId,
                 name: app.localizedName ?? bundleId,
@@ -122,7 +125,7 @@ class AppManager: ObservableObject {
             )
             newDockApps.append(dockApp)
         }
-        
+
         // Add pinned apps that aren't running
         for bundleId in pinnedBundleIdentifiers {
             if !processedBundleIds.contains(bundleId) {
@@ -131,19 +134,53 @@ class AppManager: ObservableObject {
                 }
             }
         }
-        
-        // Sort: pinned apps first, then by name
-        newDockApps.sort { lhs, rhs in
-            if lhs.isPinned && !rhs.isPinned {
-                return true
-            } else if !lhs.isPinned && rhs.isPinned {
-                return false
-            } else {
-                return lhs.name < rhs.name
+
+        // Reorder newDockApps to match saved order, fallback to default order for new apps
+        if !dockAppOrder.isEmpty {
+            newDockApps.sort { lhs, rhs in
+                let lidx = dockAppOrder.firstIndex(of: lhs.bundleIdentifier) ?? Int.max
+                let ridx = dockAppOrder.firstIndex(of: rhs.bundleIdentifier) ?? Int.max
+                if lidx != ridx {
+                    return lidx < ridx
+                }
+                // fallback: pinned first, then name
+                if lhs.isPinned && !rhs.isPinned {
+                    return true
+                } else if !lhs.isPinned && rhs.isPinned {
+                    return false
+                } else {
+                    return lhs.name < rhs.name
+                }
+            }
+        } else {
+            // fallback: pinned first, then name
+            newDockApps.sort { lhs, rhs in
+                if lhs.isPinned && !rhs.isPinned {
+                    return true
+                } else if !lhs.isPinned && rhs.isPinned {
+                    return false
+                } else {
+                    return lhs.name < rhs.name
+                }
             }
         }
-        
+
         dockApps = newDockApps
+    }
+    // MARK: - Dock App Order Persistence
+
+    private func loadDockAppOrder() {
+        if let saved = UserDefaults.standard.array(forKey: dockAppOrderKey) as? [String] {
+            dockAppOrder = saved
+        } else {
+            dockAppOrder = []
+        }
+    }
+
+    func saveDockAppOrder() {
+        let order = dockApps.map { $0.bundleIdentifier }
+        UserDefaults.standard.set(order, forKey: dockAppOrderKey)
+        dockAppOrder = order
     }
     
     private func createDockAppForBundleId(_ bundleId: String) -> DockApp? {

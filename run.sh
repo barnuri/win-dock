@@ -1,3 +1,7 @@
+#!/bin/bash
+
+set -e
+
 bash build.sh
 
 # Close any existing WinDock instances
