@@ -1,10 +1,52 @@
+import CoreGraphics
+import Darwin
 import SwiftUI
 import AppKit
+#if canImport(IOKit)
+import IOKit
+#endif
+#if canImport(IOKit.ps)
+import IOKit.ps
+#endif
+
+@discardableResult
+private func _CGSDefaultConnection() -> UInt32 {
+    // This is a private CoreGraphics symbol
+    // On ARM64, the return type may be UInt64
+    // This is a best-effort guess for modern macOS
+    typealias CGSDefaultConnectionFunc = @convention(c) () -> UInt32
+    let handle = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_NOW)
+    guard let sym = dlsym(handle, "_CGSDefaultConnection") else { return 0 }
+    let f = unsafeBitCast(sym, to: CGSDefaultConnectionFunc.self)
+    return f()
+}
+
+@discardableResult
+private func CGSSetScreenReservedRegion(_ connection: UInt32, _ region: AnyObject, _ screen: Int, _ options: NSDictionary) -> Int32 {
+    // This is a private CoreGraphics symbol
+    typealias CGSSetScreenReservedRegionFunc = @convention(c) (UInt32, AnyObject, Int, NSDictionary) -> Int32
+    let handle = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_NOW)
+    guard let sym = dlsym(handle, "CGSSetScreenReservedRegion") else { return -1 }
+    let f = unsafeBitCast(sym, to: CGSSetScreenReservedRegionFunc.self)
+    return f(connection, region, screen, options)
+}
+
+private func reserveScreenArea(_ rect: CGRect) {
+    let connection = _CGSDefaultConnection()
+    let region = CGPath(rect: rect, transform: nil)
+    let options: NSDictionary = ["CGSReservedWindowLevel": Int(CGWindowLevelForKey(.mainMenuWindow) + 1)]
+    // The region must be bridged to AnyObject (CGPath is toll-free bridged)
+    _ = CGSSetScreenReservedRegion(connection, region as AnyObject, 0, options)
+}
+
 
 class DockWindow: NSPanel {
-    private let appManager = AppManager()
+    private var isPreview: Bool {
+        ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    }
+    private static var sharedAppManager: AppManager = AppManager()
+    private var appManager: AppManager { DockWindow.sharedAppManager }
     private var windowObserver: NSObjectProtocol?
-    @AppStorage("dockPosition") private var dockPosition: DockPosition = .bottom
     @AppStorage("dockSize") private var dockSize: DockSize = .medium
     @AppStorage("autoHide") private var autoHide = false
     @AppStorage("showOnAllSpaces") private var showOnAllSpaces = true
@@ -16,17 +58,20 @@ class DockWindow: NSPanel {
     
     private var hideTimer: Timer?
     private var trackingArea: NSTrackingArea?
-    private var dockView: NSHostingView<DockContentView>?
+    private var dockView: NSHostingView<DockView>?
     
     convenience init() {
         self.init(contentRect: NSRect(x: 0, y: 0, width: 100, height: 60),
                   styleMask: [.borderless, .nonactivatingPanel],
                   backing: .buffered,
                   defer: false)
-        setup()
+        if !isPreview {
+            setup()
+        }
     }
     
     private func setup() {
+        if isPreview { return }
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         backgroundColor = .clear
@@ -34,54 +79,54 @@ class DockWindow: NSPanel {
         hasShadow = false
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
-        
-        // Set dock to be non-resizable by other windows
-        canBecomeKey = false
-        canBecomeMain = false
-        
+
         updatePosition()
         registerScreenReservedArea()
-        
+        // EXPERIMENTAL: Reserve screen area for the dock (not App Store safe)
+        reserveScreenArea(frame)
+
         appManager.startMonitoring()
-        
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(screenDidChange),
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
-        
-        // Listen for settings changes
+
         windowObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.updatePosition()
-            self?.updateDockView()
-            self?.registerScreenReservedArea()
+            guard let self = self else { return }
+            self.updatePosition()
+            self.updateDockView()
+            self.registerScreenReservedArea()
         }
-        
+
         setupDockView()
         setupTrackingArea()
-        
+
         if autoHide {
             alphaValue = 0
         }
     }
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
     
     private func setupDockView() {
-        let dockView = DockContentView(dockSize: dockSize)
+        let dockView = DockView()
         let hostingView = NSHostingView(rootView: dockView)
         hostingView.translatesAutoresizingMaskIntoConstraints = false
-        
         contentView = hostingView
         self.dockView = hostingView
     }
     
     private func updateDockView() {
         guard let hostingView = dockView else { return }
-        hostingView.rootView = DockContentView(dockSize: dockSize)
+        hostingView.rootView = DockView()
+        setupTrackingArea()
     }
     
     private func setupTrackingArea() {
@@ -126,34 +171,27 @@ class DockWindow: NSPanel {
     }
     
     override func rightMouseDown(with event: NSEvent) {
-        // Check if right-click is on the background (not on an app icon)
         let locationInWindow = event.locationInWindow
         _ = contentView?.convert(locationInWindow, from: nil) ?? .zero
-        
-        // Create context menu
         let menu = NSMenu()
-        
         // Position submenu
         let positionMenu = NSMenu()
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
         for position in DockPosition.allCases {
             let item = NSMenuItem(
                 title: position.displayName,
                 action: #selector(changePosition(_:)),
                 keyEquivalent: ""
             )
-            item.representedObject = position
+            item.representedObject = position.rawValue
             item.target = self
-            item.state = position == dockPosition ? .on : .off
+            item.state = position == appDelegate.dockPosition ? .on : .off
             positionMenu.addItem(item)
         }
-        
         let positionItem = NSMenuItem(title: "Taskbar Position", action: nil, keyEquivalent: "")
         positionItem.submenu = positionMenu
         menu.addItem(positionItem)
-        
         menu.addItem(NSMenuItem.separator())
-        
-        // Settings
         let settingsItem = NSMenuItem(
             title: "Settings...",
             action: #selector(openSettings),
@@ -161,10 +199,7 @@ class DockWindow: NSPanel {
         )
         settingsItem.target = self
         menu.addItem(settingsItem)
-        
         menu.addItem(NSMenuItem.separator())
-        
-        // Quit
         let quitItem = NSMenuItem(
             title: "Quit Win Dock",
             action: #selector(quitApp),
@@ -172,16 +207,14 @@ class DockWindow: NSPanel {
         )
         quitItem.target = self
         menu.addItem(quitItem)
-        
-        // Show menu at mouse location
         menu.popUp(positioning: nil, at: locationInWindow, in: self.contentView)
     }
     
     @objc private func changePosition(_ sender: NSMenuItem) {
-        guard let position = sender.representedObject as? DockPosition else { return }
-        dockPosition = position
-        updatePosition()
-        registerScreenReservedArea()
+        guard let raw = sender.representedObject as? String,
+              let position = DockPosition(rawValue: raw),
+              let appDelegate = NSApp.delegate as? AppDelegate else { return }
+        appDelegate.updateDockPosition(position)
     }
     
     @objc private func openSettings() {
@@ -200,48 +233,12 @@ class DockWindow: NSPanel {
     }
     
     private func updatePosition() {
-        guard let screen = showOnAllSpaces ? NSScreen.main : NSScreen.screens.first else { return }
-        let screenFrame = screen.visibleFrame
-        let dockHeight = getDockHeight()
-        let fullWidth = screenFrame.width
-        
-        var newFrame: NSRect
-        
-        switch dockPosition {
-        case .bottom:
-            newFrame = NSRect(
-                x: screenFrame.minX,
-                y: screenFrame.minY,
-                width: fullWidth,
-                height: dockHeight
-            )
-        case .top:
-            // Account for menu bar
-            let menuBarHeight: CGFloat = NSApplication.shared.mainMenu?.menuBarHeight ?? 24
-            newFrame = NSRect(
-                x: screenFrame.minX,
-                y: screenFrame.maxY - dockHeight - menuBarHeight,
-                width: fullWidth,
-                height: dockHeight
-            )
-        case .left:
-            newFrame = NSRect(
-                x: screenFrame.minX,
-                y: screenFrame.minY,
-                width: dockHeight,
-                height: screenFrame.height
-            )
-        case .right:
-            newFrame = NSRect(
-                x: screenFrame.maxX - dockHeight,
-                y: screenFrame.minY,
-                width: dockHeight,
-                height: screenFrame.height
-            )
-        }
-        
+        guard let appDelegate = NSApp.delegate as? AppDelegate,
+              let screen = showOnAllSpaces ? NSScreen.main : NSScreen.screens.first else { return }
+        let newFrame = appDelegate.dockFrame(for: appDelegate.dockPosition, screen: screen)
         setFrame(newFrame, display: true, animate: false)
         setupTrackingArea()
+        reserveScreenArea(newFrame)
     }
     
     private func getDockHeight() -> CGFloat {
@@ -253,23 +250,7 @@ class DockWindow: NSPanel {
     }
     
     private func registerScreenReservedArea() {
-        // Register the dock area to prevent window overlap
-        if let screen = NSScreen.main {
-            let dockHeight = getDockHeight()
-            
-            // This would need to use private APIs or system integration
-            // to properly reserve screen space
-            // For now, we'll use the window level to stay on top
-            
-            switch dockPosition {
-            case .bottom, .top:
-                // Reserve horizontal space
-                AppLogger.shared.info("Reserving \(dockHeight)px \(dockPosition.rawValue) space")
-            case .left, .right:
-                // Reserve vertical space
-                AppLogger.shared.info("Reserving \(dockHeight)px \(dockPosition.rawValue) space")
-            }
-        }
+        // No-op: now handled by AppDelegate's dockFrame logic and private API
     }
     
     func cleanup() {
@@ -282,21 +263,36 @@ class DockWindow: NSPanel {
     }
     
     deinit {
-        NotificationCenter.default.removeObserver(self)
-        if let observer = windowObserver {
-            NotificationCenter.default.removeObserver(observer)
+        if !isPreview {
+            NotificationCenter.default.removeObserver(self)
+            if let observer = windowObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
         }
     }
 }
 
-// Extension for DockPosition display names
-extension DockPosition {
-    var displayName: String {
-        switch self {
-        case .bottom: return "Bottom"
-        case .top: return "Top"
-        case .left: return "Left"
-        case .right: return "Right"
+
+// Fixed lock screen function
+func lockScreen() {
+    let script = """
+    tell application "System Events"
+        keystroke "q" using {command down, control down}
+    end tell
+    """
+    
+    if let appleScript = NSAppleScript(source: script) {
+        var error: NSDictionary?
+        appleScript.executeAndReturnError(&error)
+        if let error = error {
+            AppLogger.shared.error("Lock screen error: \(error)")
+            // Fallback to screen saver
+            let task = Process()
+            task.launchPath = "/usr/bin/open"
+            task.arguments = ["-a", "ScreenSaverEngine"]
+            task.launch()
+        } else {
+            AppLogger.shared.info("Lock screen triggered successfully")
         }
     }
 }

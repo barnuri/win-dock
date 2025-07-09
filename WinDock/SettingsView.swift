@@ -1,7 +1,12 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @AppStorage("dockPosition") private var dockPosition: DockPosition = .bottom
+    @State private var dockPosition: DockPosition = {
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            return appDelegate.dockPosition
+        }
+        return .bottom
+    }()
     @AppStorage("dockSize") private var dockSize: DockSize = .medium
     @AppStorage("autoHide") private var autoHide = false
     @AppStorage("showOnAllSpaces") private var showOnAllSpaces = true
@@ -13,6 +18,7 @@ struct SettingsView: View {
     @AppStorage("taskbarTransparency") private var taskbarTransparency = 0.8
     @AppStorage("showLabels") private var showLabels = false
     @AppStorage("animationSpeed") private var animationSpeed = 1.0
+    @AppStorage("use24HourClock") private var use24HourClock = true
     
     @StateObject private var dockManager = MacOSDockManager()
     
@@ -20,6 +26,11 @@ struct SettingsView: View {
         TabView {
             GeneralSettingsView(
                 dockPosition: $dockPosition,
+                onDockPositionChange: { newPosition in
+                    if let appDelegate = NSApp.delegate as? AppDelegate {
+                        appDelegate.updateDockPosition(newPosition)
+                    }
+                },
                 dockSize: $dockSize,
                 autoHide: $autoHide,
                 showOnAllSpaces: $showOnAllSpaces,
@@ -58,12 +69,14 @@ struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 500, height: 450)
+        .frame(width: 600, height: 600)
+        .frame(maxWidth: .infinity) // Allow settings window to stretch if needed
     }
 }
 
 struct GeneralSettingsView: View {
     @Binding var dockPosition: DockPosition
+    var onDockPositionChange: ((DockPosition) -> Void)? = nil
     @Binding var dockSize: DockSize
     @Binding var autoHide: Bool
     @Binding var showOnAllSpaces: Bool
@@ -72,6 +85,9 @@ struct GeneralSettingsView: View {
     @Binding var showTaskView: Bool
     @ObservedObject var dockManager: MacOSDockManager
     
+    @AppStorage("searchAppChoice") private var searchAppChoice: SearchAppChoice = .spotlight
+    @AppStorage("use24HourClock") private var use24HourClock = true
+
     var body: some View {
         Form {
             Section("Taskbar Position") {
@@ -82,15 +98,21 @@ struct GeneralSettingsView: View {
                     Text("Right").tag(DockPosition.right)
                 }
                 .pickerStyle(RadioGroupPickerStyle())
+                .onChange(of: dockPosition) { oldValue, newValue in
+                    onDockPositionChange?(newValue)
+                }
             }
             
-            Section("Taskbar Size") {
-                Picker("Size:", selection: $dockSize) {
+            Section("Icon Size") {
+                Picker("Icon Size:", selection: $dockSize) {
                     Text("Small").tag(DockSize.small)
                     Text("Medium").tag(DockSize.medium)
                     Text("Large").tag(DockSize.large)
                 }
                 .pickerStyle(SegmentedPickerStyle())
+                Text("Controls the size of the icons in the dock, not the dock height.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
             
             Section("Taskbar Behavior") {
@@ -102,6 +124,29 @@ struct GeneralSettingsView: View {
                 Toggle("Show Task View button", isOn: $showTaskView)
             }
             
+            Section("Clock Format") {
+                Picker("Time Format:", selection: $use24HourClock) {
+                    Text("24-Hour").tag(true)
+                    Text("12-Hour").tag(false)
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                Text("Choose whether the system tray clock uses 24-hour or 12-hour format.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section("Search Button") {
+                Picker("Search App:", selection: $searchAppChoice) {
+                    ForEach(SearchAppChoice.allCases, id: \.self) { choice in
+                        Text(choice.displayName).tag(choice)
+                    }
+                }
+                .pickerStyle(SegmentedPickerStyle())
+                Text("Choose which search app opens when clicking the search button in the taskbar.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Section("macOS Dock Management") {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
@@ -407,12 +452,6 @@ struct FeatureRow: View {
     }
 }
 
-enum DockPosition: String, CaseIterable {
-    case bottom = "bottom"
-    case top = "top"
-    case left = "left"
-    case right = "right"
-}
 
 enum DockSize: String, CaseIterable {
     case small = "small"
