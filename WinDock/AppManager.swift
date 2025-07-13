@@ -61,7 +61,18 @@ class AppManager: ObservableObject {
         setupAccessibility()
         updateDockApps()
     }
-    
+
+    func hideOtherApps(except app: DockApp) {
+        let runningApps = NSWorkspace.shared.runningApplications
+        for runningApp in runningApps {
+            guard runningApp.bundleIdentifier != app.bundleIdentifier,
+                  runningApp.bundleIdentifier != winDockBundleID,
+                  runningApp.activationPolicy == .regular,
+                  runningApp.isHidden == false else { continue }
+            runningApp.hide()
+        }
+    }
+
     private func setupAccessibility() {
         // Request accessibility permissions if needed
         let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
@@ -71,7 +82,23 @@ class AppManager: ObservableObject {
             accessibilityElement = AXUIElementCreateSystemWide()
         }
     }
-    
+
+    func closeAllWindows(for app: DockApp) {
+        guard let runningApp = app.runningApplication else { return }
+        let axApp = AXUIElementCreateApplication(runningApp.processIdentifier)
+        var windows: CFTypeRef?
+        AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windows)
+        if let windowArray = windows as? [AXUIElement] {
+            for window in windowArray {
+                var closeButton: CFTypeRef?
+                AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &closeButton)
+                if let button = closeButton {
+                    AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+                }
+            }
+        }
+    }
+
     func startMonitoring() {
         // Update immediately
         updateDockApps()
@@ -297,26 +324,56 @@ class AppManager: ObservableObject {
     }
     
     // MARK: - App Actions
-    
+
+    func focusWindow(windowID: CGWindowID, app: DockApp) {
+        guard let runningApp = app.runningApplication else { return }
+        if #available(macOS 14.0, *) {
+            runningApp.activate()
+        } else {
+            runningApp.activate(options: [.activateIgnoringOtherApps])
+        }
+        let axApp = AXUIElementCreateApplication(runningApp.processIdentifier)
+        var windows: CFTypeRef?
+        AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windows)
+        if let windowArray = windows as? [AXUIElement] {
+            for window in windowArray {
+                var windowIDRef: CFTypeRef?
+                AXUIElementCopyAttributeValue(window, "_AXWindowNumber" as CFString, &windowIDRef)
+                if let windowNumber = windowIDRef as? Int, windowNumber == windowID {
+                    AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                    break
+                }
+            }
+        }
+    }
+
     func activateApp(_ app: DockApp) {
+        AppLogger.shared.info("activateApp called for \(app.name), isRunning: \(app.isRunning), isActive: \(app.runningApplication?.isActive ?? false)")
         if let runningApp = app.runningApplication {
             // If app has multiple windows, cycle through them
             if app.windowCount > 1 && runningApp.isActive {
+                AppLogger.shared.info("App is active and has multiple windows, cycling windows for \(app.name)")
                 cycleWindows(for: app)
             } else {
                 if #available(macOS 14.0, *) {
+                    AppLogger.shared.info("Activating app (macOS 14+): \(app.name)")
                     runningApp.activate()
                 } else {
+                    AppLogger.shared.info("Activating app (legacy): \(app.name)")
                     runningApp.activate(options: [.activateIgnoringOtherApps])
                 }
             }
         } else if let appURL = app.url {
+            AppLogger.shared.info("Launching app from URL: \(appURL.path)")
             let configuration = NSWorkspace.OpenConfiguration()
             NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
         } else {
             if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier) {
+                AppLogger.shared.info("Launching app from bundle identifier: \(app.bundleIdentifier)")
                 let configuration = NSWorkspace.OpenConfiguration()
                 NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
+            } else {
+                AppLogger.shared.error("Could not find app to activate: \(app.bundleIdentifier)")
             }
         }
     }
@@ -343,7 +400,13 @@ class AppManager: ObservableObject {
     }
     
     func hideApp(_ app: DockApp) {
-        app.runningApplication?.hide()
+        AppLogger.shared.info("hideApp called for \(app.name), isRunning: \(app.isRunning), isActive: \(app.runningApplication?.isActive ?? false)")
+        if let runningApp = app.runningApplication {
+            runningApp.hide()
+            AppLogger.shared.info("hideApp: hide() called for \(app.name)")
+        } else {
+            AppLogger.shared.error("hideApp: No runningApplication for \(app.name)")
+        }
     }
     
     func quitApp(_ app: DockApp) {

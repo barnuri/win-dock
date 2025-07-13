@@ -9,35 +9,7 @@ import IOKit
 import IOKit.ps
 #endif
 
-@discardableResult
-private func _CGSDefaultConnection() -> UInt32 {
-    // This is a private CoreGraphics symbol
-    // On ARM64, the return type may be UInt64
-    // This is a best-effort guess for modern macOS
-    typealias CGSDefaultConnectionFunc = @convention(c) () -> UInt32
-    let handle = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_NOW)
-    guard let sym = dlsym(handle, "_CGSDefaultConnection") else { return 0 }
-    let f = unsafeBitCast(sym, to: CGSDefaultConnectionFunc.self)
-    return f()
-}
-
-@discardableResult
-private func CGSSetScreenReservedRegion(_ connection: UInt32, _ region: AnyObject, _ screen: Int, _ options: NSDictionary) -> Int32 {
-    // This is a private CoreGraphics symbol
-    typealias CGSSetScreenReservedRegionFunc = @convention(c) (UInt32, AnyObject, Int, NSDictionary) -> Int32
-    let handle = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_NOW)
-    guard let sym = dlsym(handle, "CGSSetScreenReservedRegion") else { return -1 }
-    let f = unsafeBitCast(sym, to: CGSSetScreenReservedRegionFunc.self)
-    return f(connection, region, screen, options)
-}
-
-private func reserveScreenArea(_ rect: CGRect) {
-    let connection = _CGSDefaultConnection()
-    let region = CGPath(rect: rect, transform: nil)
-    let options: NSDictionary = ["CGSReservedWindowLevel": Int(CGWindowLevelForKey(.mainMenuWindow) + 1)]
-    // The region must be bridged to AnyObject (CGPath is toll-free bridged)
-    _ = CGSSetScreenReservedRegion(connection, region as AnyObject, 0, options)
-}
+// ...existing code...
 
 
 class DockWindow: NSPanel {
@@ -53,7 +25,6 @@ class DockWindow: NSPanel {
     @AppStorage("centerTaskbarIcons") private var centerTaskbarIcons = true
     @AppStorage("showSystemTray") private var showSystemTray = true
     @AppStorage("showTaskView") private var showTaskView = true
-    @AppStorage("taskbarTransparency") private var taskbarTransparency = 0.8
     @AppStorage("searchAppChoice") private var searchAppChoice = SearchAppChoice.spotlight
     
     private var hideTimer: Timer?
@@ -82,9 +53,6 @@ class DockWindow: NSPanel {
 
         updatePosition()
         registerScreenReservedArea()
-        // EXPERIMENTAL: Reserve screen area for the dock (not App Store safe)
-        reserveScreenArea(frame)
-
         appManager.startMonitoring()
 
         NotificationCenter.default.addObserver(
@@ -108,9 +76,7 @@ class DockWindow: NSPanel {
         setupDockView()
         setupTrackingArea()
 
-        if autoHide {
-            alphaValue = 0
-        }
+    // Always solid background, do not set alphaValue
     }
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
@@ -238,7 +204,6 @@ class DockWindow: NSPanel {
         let newFrame = appDelegate.dockFrame(for: appDelegate.dockPosition, screen: screen)
         setFrame(newFrame, display: true, animate: false)
         setupTrackingArea()
-        reserveScreenArea(newFrame)
     }
     
     private func getDockHeight() -> CGFloat {

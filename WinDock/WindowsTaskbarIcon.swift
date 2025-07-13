@@ -5,23 +5,25 @@ struct WindowsTaskbarIcon: View {
     let app: DockApp
     let isHovered: Bool
     let iconSize: CGFloat
-    let onTap: () -> Void
-    let onRightClick: (CGPoint) -> Void
     let appManager: AppManager
-    
+
     @State private var isPressed = false
-    
+
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 5)
                     .fill(backgroundFill)
-                    .frame(width: 40, height: 40)
+                    .frame(width: 48, height: 38)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(isHovered ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1.5)
+                    )
                 if let icon = app.icon {
                     Image(nsImage: icon)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 24, height: 24)
+                        .frame(width: 28, height: 28)
                 }
                 if app.windowCount > 1 {
                     HStack(spacing: 2) {
@@ -32,32 +34,30 @@ struct WindowsTaskbarIcon: View {
                                 .cornerRadius(1)
                         }
                     }
-                    .offset(y: 23)
+                    .offset(y: 18)
                 }
             }
-            if app.isRunning {
-                Rectangle()
-                    .fill(Color.white)
-                    .frame(width: isHovered ? 30 : (app.windowCount > 0 ? 20 : 6), height: 3)
-                    .cornerRadius(1.5)
-                    .animation(.easeInOut(duration: 0.15), value: isHovered)
-                    .padding(.top, 2)
-            } else {
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(width: 30, height: 3)
-                    .padding(.top, 2)
-            }
+            Rectangle()
+                .fill(app.isRunning ? (isHovered ? Color.accentColor : Color.accentColor.opacity(0.7)) : Color.clear)
+                .frame(width: 32, height: app.isRunning ? 4 : 2)
+                .cornerRadius(2)
+                .padding(.top, 4)
         }
-        .frame(width: 40, height: 50)
+        .frame(width: 54, height: 54)
         .contentShape(Rectangle())
         .onTapGesture {
-            onTap()
+            for currentApp in appManager.dockApps.filter({ $0.bundleIdentifier == app.bundleIdentifier }) {
+                if currentApp.isRunning && currentApp.runningApplication?.isActive == true {
+                    appManager.hideApp(currentApp)
+                } else {
+                    appManager.activateApp(currentApp)
+                }
+            }
         }
         .contextMenu {
             AppContextMenuView(app: app, appManager: appManager)
         }
-        .scaleEffect(isPressed ? 0.95 : 1.0)
+        .scaleEffect(isPressed ? 0.97 : 1.0)
         .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity, pressing: { pressing in
             withAnimation(.easeInOut(duration: 0.1)) {
                 isPressed = pressing
@@ -71,16 +71,17 @@ struct WindowsTaskbarIcon: View {
             }
         )
     }
-    
+
     private var backgroundFill: some ShapeStyle {
         if isPressed {
-            return AnyShapeStyle(Color.white.opacity(0.25))
-        } else if isHovered {
-            return AnyShapeStyle(Color.white.opacity(0.15))
-        } else if app.isRunning {
-            return AnyShapeStyle(Color.white.opacity(0.08))
-        } else {
-            return AnyShapeStyle(Color.clear)
+            return AnyShapeStyle(Color.accentColor.opacity(0.18))
         }
+        if isHovered {
+            return AnyShapeStyle(Color.accentColor.opacity(0.13))
+        }
+        if app.isRunning {
+            return AnyShapeStyle(Color.accentColor.opacity(0.08))
+        }
+        return AnyShapeStyle(Color.clear)
     }
 }

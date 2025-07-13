@@ -16,7 +16,6 @@ final class AppLogger {
         errorFileURL = logsDir.appendingPathComponent("errors.log")
     }
 
-
     func info(_ message: String) {
         write(message, to: logFileURL)
     }

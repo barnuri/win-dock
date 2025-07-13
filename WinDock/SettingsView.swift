@@ -201,6 +201,21 @@ struct GeneralSettingsView: View {
     }
 }
 
+
+enum SearchAppChoice: String, CaseIterable {
+    case spotlight = "spotlight"
+    case raycast = "raycast"
+    case alfred = "alfred"
+    
+    var displayName: String {
+        switch self {
+        case .spotlight: return "Spotlight"
+        case .raycast: return "Raycast"
+        case .alfred: return "Alfred"
+        }
+    }
+}
+
 struct AppearanceSettingsView: View {
     @Binding var combineTaskbarButtons: Bool
     @Binding var useSmallTaskbarButtons: Bool
