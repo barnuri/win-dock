@@ -29,6 +29,20 @@ struct DockView: View {
             appManager.stopMonitoring()
         }
     }
+    
+    // Computed property for background material
+    private var backgroundMaterial: some ShapeStyle {
+        if taskbarTransparency >= 0.95 {
+            // Use glass effect for high transparency
+            return AnyShapeStyle(.regularMaterial)
+        } else if taskbarTransparency >= 0.7 {
+            // Use blurred material for medium transparency
+            return AnyShapeStyle(.thinMaterial)
+        } else {
+            // Use solid color for low transparency
+            return AnyShapeStyle(Color(NSColor.windowBackgroundColor))
+        }
+    }
 
     @ViewBuilder
     private func dockMainContent(geometry: GeometryProxy) -> some View {

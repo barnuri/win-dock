@@ -7,7 +7,6 @@ struct WindowsTaskbarIcon: View {
     let iconSize: CGFloat
     let appManager: AppManager
 
-    @State private var isPressed = false
     @AppStorage("showLabels") private var showLabels = false
 
     var body: some View {

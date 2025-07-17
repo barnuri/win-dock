@@ -114,7 +114,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .bottom:
             return NSRect(
                 x: screenFrame.minX,
-                y: 0,
+                y: screenFrame.minY,
                 width: screenFrame.width,
                 height: dockHeight
             )

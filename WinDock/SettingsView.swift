@@ -1,12 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @State private var dockPosition: DockPosition = {
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            return appDelegate.dockPosition
-        }
-        return .bottom
-    }()
+    @AppStorage("dockPosition") private var dockPosition: DockPosition = .bottom
     @AppStorage("dockSize") private var dockSize: DockSize = .large
     @AppStorage("autoHide") private var autoHide = false
     @AppStorage("showOnAllSpaces") private var showOnAllSpaces = true
@@ -29,9 +24,8 @@ struct SettingsView: View {
             GeneralSettingsView(
                 dockPosition: $dockPosition,
                 onDockPositionChange: { newPosition in
-                    if let appDelegate = NSApp.delegate as? AppDelegate {
-                        appDelegate.updateDockPosition(newPosition)
-                    }
+                    // No need for manual update since @AppStorage handles persistence
+                    // The userDefaultsDidChange observer in AppDelegate will handle dock updates
                 },
                 dockSize: $dockSize,
                 autoHide: $autoHide,
@@ -244,6 +238,17 @@ struct AppearanceSettingsView: View {
     @Binding var showLabels: Bool
     @Binding var animationSpeed: Double
     
+    // Computed property for preview material
+    private var previewMaterial: some ShapeStyle {
+        if taskbarTransparency >= 0.95 {
+            return AnyShapeStyle(.regularMaterial)
+        } else if taskbarTransparency >= 0.7 {
+            return AnyShapeStyle(.thinMaterial)
+        } else {
+            return AnyShapeStyle(Color(NSColor.windowBackgroundColor))
+        }
+    }
+    
     var body: some View {
         Form {
             Section("Taskbar Appearance") {
@@ -265,10 +270,37 @@ struct AppearanceSettingsView: View {
             Section("Visual Effects") {
                 VStack(alignment: .leading) {
                     Text("Taskbar transparency")
-                    Slider(value: $taskbarTransparency, in: 0.3...1.0, step: 0.1)
-                    Text("\(Int(taskbarTransparency * 100))%")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    Slider(value: $taskbarTransparency, in: 0.0...1.0, step: 0.05)
+                    HStack {
+                        Text("Solid")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("\(Int(taskbarTransparency * 100))%")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("Glass")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    // Preview of transparency effect
+                    HStack {
+                        Text("Preview:")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        Rectangle()
+                            .fill(previewMaterial)
+                            .opacity(taskbarTransparency)
+                            .frame(width: 60, height: 20)
+                            .overlay(
+                                Rectangle()
+                                    .stroke(Color.primary.opacity(0.2), lineWidth: 1)
+                            )
+                            .cornerRadius(4)
+                    }
                 }
                 
                 VStack(alignment: .leading) {

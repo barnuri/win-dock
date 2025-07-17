@@ -391,17 +391,20 @@ struct DateTimeView: View {
     
     var body: some View {
         Button(action: { showCalendar.toggle() }) {
-            VStack(alignment: .trailing, spacing: 0) {
+            VStack(alignment: .center, spacing: 0) {
                 Text(timeString)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.primary)
+                    .multilineTextAlignment(.center)
                 
                 Text(dateString)
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
+            .frame(minWidth: 60) // Ensure consistent width for center alignment
         }
         .buttonStyle(.plain)
         .help("Click to open calendar")
