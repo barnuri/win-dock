@@ -30,10 +30,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var dockWindows: [DockWindow] = []
     var statusBarItem: NSStatusItem?
     var settingsWindowObserver: NSObjectProtocol?
+    var settingsWindow: NSWindow?
+    var settingsWindowDelegate: SettingsWindowDelegate?
     @AppStorage("dockPosition") var dockPosition: DockPosition = .bottom
     private var isUpdatingDockWindows = false
     private var lastDockPosition: DockPosition = .bottom
     private var lastDockSize: String = "medium"
+    private var lastPaddingTop: Double = 0.0
+    private var lastPaddingBottom: Double = 0.0
+    private var lastPaddingLeft: Double = 0.0
+    private var lastPaddingRight: Double = 0.0
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         setGlobalErrorHandlers()
@@ -41,6 +47,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize tracking variables
         lastDockPosition = dockPosition
         lastDockSize = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
+        lastPaddingTop = UserDefaults.standard.double(forKey: "paddingTop")
+        lastPaddingBottom = UserDefaults.standard.double(forKey: "paddingBottom")
+        lastPaddingLeft = UserDefaults.standard.double(forKey: "paddingLeft")
+        lastPaddingRight = UserDefaults.standard.double(forKey: "paddingRight")
         
         setupStatusBarItem()
         setupDockWindowsForAllScreens()
@@ -107,37 +117,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Centralized frame calculation for dock position
     func dockFrame(for position: DockPosition, screen: NSScreen) -> NSRect {
-        let screenFrame = screen.visibleFrame
+        let visibleFrame = screen.visibleFrame
         let dockHeight: CGFloat = getDockHeight()
+        
+        // Get padding values from UserDefaults
+        let paddingTop = CGFloat(UserDefaults.standard.double(forKey: "paddingTop"))
+        let paddingBottom = CGFloat(UserDefaults.standard.double(forKey: "paddingBottom"))
+        let paddingLeft = CGFloat(UserDefaults.standard.double(forKey: "paddingLeft"))
+        let paddingRight = CGFloat(UserDefaults.standard.double(forKey: "paddingRight"))
         
         switch position {
         case .bottom:
+            // Use full screen frame for bottom to avoid safe area
             return NSRect(
-                x: screenFrame.minX,
-                y: screenFrame.minY,
-                width: screenFrame.width,
+                x: visibleFrame.minX + paddingLeft,
+                y: visibleFrame.minY + paddingBottom,
+                width: visibleFrame.width - paddingLeft - paddingRight,
                 height: dockHeight
             )
         case .top:
             return NSRect(
-                x: screenFrame.minX,
-                y: screenFrame.maxY - dockHeight,
-                width: screenFrame.width,
+                x: visibleFrame.minX + paddingLeft,
+                y: visibleFrame.maxY - dockHeight - paddingTop,
+                width: visibleFrame.width - paddingLeft - paddingRight,
                 height: dockHeight
             )
         case .left:
             return NSRect(
-                x: screenFrame.minX,
-                y: screenFrame.minY,
+                x: visibleFrame.minX + paddingLeft,
+                y: visibleFrame.minY + paddingBottom,
                 width: dockHeight,
-                height: screenFrame.height
+                height: visibleFrame.height - paddingTop - paddingBottom
             )
         case .right:
             return NSRect(
-                x: screenFrame.maxX - dockHeight,
-                y: screenFrame.minY,
+                x: visibleFrame.maxX - dockHeight - paddingRight,
+                y: visibleFrame.minY + paddingBottom,
                 width: dockHeight,
-                height: screenFrame.height
+                height: visibleFrame.height - paddingTop - paddingBottom
             )
         }
     }
@@ -184,39 +201,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func reserveScreenSpace() {
         let dockHeight = getDockHeight()
         
+        // Get padding values from UserDefaults
+        let paddingTop = CGFloat(UserDefaults.standard.double(forKey: "paddingTop"))
+        let paddingBottom = CGFloat(UserDefaults.standard.double(forKey: "paddingBottom"))
+        let paddingLeft = CGFloat(UserDefaults.standard.double(forKey: "paddingLeft"))
+        let paddingRight = CGFloat(UserDefaults.standard.double(forKey: "paddingRight"))
+        
         // Reserve screen space for each screen to prevent window overlap
         for screen in NSScreen.screens {
-            let screenFrame = screen.frame
+            let screenFrame = screen.frame // Use full screen frame
+            let visibleFrame = screen.visibleFrame
             var reservedArea = CGRect.zero
             
             switch dockPosition {
             case .bottom:
+                // Use full screen frame for bottom to avoid safe area
                 reservedArea = CGRect(
-                    x: screenFrame.minX,
-                    y: screenFrame.minY,
-                    width: screenFrame.width,
+                    x: screenFrame.minX + paddingLeft,
+                    y: screenFrame.minY + paddingBottom,
+                    width: screenFrame.width - paddingLeft - paddingRight,
                     height: dockHeight
                 )
             case .top:
                 reservedArea = CGRect(
-                    x: screenFrame.minX,
-                    y: screenFrame.maxY - dockHeight,
-                    width: screenFrame.width,
+                    x: visibleFrame.minX + paddingLeft,
+                    y: visibleFrame.maxY - dockHeight - paddingTop,
+                    width: visibleFrame.width - paddingLeft - paddingRight,
                     height: dockHeight
                 )
             case .left:
                 reservedArea = CGRect(
-                    x: screenFrame.minX,
-                    y: screenFrame.minY,
+                    x: visibleFrame.minX + paddingLeft,
+                    y: visibleFrame.minY + paddingBottom,
                     width: dockHeight,
-                    height: screenFrame.height
+                    height: visibleFrame.height - paddingTop - paddingBottom
                 )
             case .right:
                 reservedArea = CGRect(
-                    x: screenFrame.maxX - dockHeight,
-                    y: screenFrame.minY,
+                    x: visibleFrame.maxX - dockHeight - paddingRight,
+                    y: visibleFrame.minY + paddingBottom,
                     width: dockHeight,
-                    height: screenFrame.height
+                    height: visibleFrame.height - paddingTop - paddingBottom
                 )
             }
             
@@ -257,10 +282,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func userDefaultsDidChange() {
         // Only update if dock-related settings have changed
         let currentDockSize = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
+        let currentPaddingTop = UserDefaults.standard.double(forKey: "paddingTop")
+        let currentPaddingBottom = UserDefaults.standard.double(forKey: "paddingBottom")
+        let currentPaddingLeft = UserDefaults.standard.double(forKey: "paddingLeft")
+        let currentPaddingRight = UserDefaults.standard.double(forKey: "paddingRight")
         
-        if dockPosition != lastDockPosition || currentDockSize != lastDockSize {
+        if dockPosition != lastDockPosition || 
+           currentDockSize != lastDockSize ||
+           currentPaddingTop != lastPaddingTop ||
+           currentPaddingBottom != lastPaddingBottom ||
+           currentPaddingLeft != lastPaddingLeft ||
+           currentPaddingRight != lastPaddingRight {
+            
             lastDockPosition = dockPosition
             lastDockSize = currentDockSize
+            lastPaddingTop = currentPaddingTop
+            lastPaddingBottom = currentPaddingBottom
+            lastPaddingLeft = currentPaddingLeft
+            lastPaddingRight = currentPaddingRight
             
             DispatchQueue.main.async {
                 self.setupDockWindowsForAllScreens()
@@ -269,30 +308,79 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    // Static method that can be called from anywhere
+    static func openSettingsWindow() {
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.showSettingsWindow()
+        }
+    }
+    
     @objc func openSettingsMenu() {
         openSettings()
     }
 
     @objc func openSettings() {
+        DispatchQueue.main.async {
+            self.showSettingsWindow()
+        }
+    }
+    
+    func showSettingsWindow() {
         NSApp.activate(ignoringOtherApps: true)
 
-        for window in NSApp.windows {
-            if window.title.contains("Settings") || window.title.contains("Preferences") {
-                window.makeKeyAndOrderFront(nil)
-                window.orderFrontRegardless()
-                return
-            }
+        // First, check if settings window is already open
+        if let existingWindow = settingsWindow, existingWindow.isVisible {
+            existingWindow.makeKeyAndOrderFront(nil)
+            existingWindow.orderFrontRegardless()
+            return
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            if #available(macOS 14.0, *) {
-                if !NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
-                    _ = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-                }
-            } else {
-                _ = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-            }
+        // Create settings window manually
+        createSettingsWindow()
+    }
+    
+    private func createSettingsWindow() {
+        let settingsView = SettingsView()
+        let hostingController = NSHostingController(rootView: settingsView)
+        
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 650),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        
+        window.title = "WinDock Settings"
+        window.contentViewController = hostingController
+        window.center()
+        window.setFrameAutosaveName("SettingsWindow")
+        
+        // Set minimum and maximum window size with scroll support
+        window.minSize = NSSize(width: 600, height: 400)
+        window.maxSize = NSSize(width: 1200, height: 1000)
+        
+        // Enable full size content view to show tabs properly
+        window.titlebarAppearsTransparent = false
+        window.titleVisibility = .visible
+        
+        // Enable automatic content size adjustment
+        window.contentResizeIncrements = NSSize(width: 1, height: 1)
+        
+        // Prevent the app from terminating when this window closes
+        window.isReleasedWhenClosed = false
+        
+        window.makeKeyAndOrderFront(nil)
+        window.level = .normal
+        
+        // Store reference to the window
+        settingsWindow = window
+        
+        // Set up window delegate to clean up reference when closed
+        settingsWindowDelegate = SettingsWindowDelegate { [weak self] in
+            self?.settingsWindow = nil
+            self?.settingsWindowDelegate = nil
         }
+        window.delegate = settingsWindowDelegate
     }
     
     @objc private func quitApp() {
@@ -316,5 +404,24 @@ enum DockPosition: String, CaseIterable {
         case .left: return "Left"
         case .right: return "Right"
         }
+    }
+}
+
+// Helper class to handle settings window delegate
+class SettingsWindowDelegate: NSObject, NSWindowDelegate {
+    private let onClose: () -> Void
+    
+    init(onClose: @escaping () -> Void) {
+        self.onClose = onClose
+        super.init()
+    }
+    
+    func windowWillClose(_ notification: Notification) {
+        onClose()
+    }
+    
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        // Always allow the window to close, but don't terminate the app
+        return true
     }
 }

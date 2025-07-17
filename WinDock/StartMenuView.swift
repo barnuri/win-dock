@@ -296,9 +296,7 @@ struct StartMenuView: View {
     }
     
     private func openWinDockSettings() {
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            appDelegate.openSettings()
-        }
+        AppDelegate.openSettingsWindow()
         dismiss()
     }
     

@@ -12,6 +12,8 @@ struct WindowsTaskbarIcon: View {
     @State private var previewPosition: CGPoint = .zero
     @State private var isDragging = false
     @State private var dragOffset = CGSize.zero
+    @State private var hoverTimer: Timer?
+    @State private var isIconHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,8 +29,10 @@ struct WindowsTaskbarIcon: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(width: iconSize * 0.7, height: iconSize * 0.7)
-                        .scaleEffect(isDragging ? 0.9 : 1.0)
+                        .scaleEffect(isDragging ? 0.9 : (isIconHovered ? 1.2 : 1.0))
                         .opacity(isDragging ? 0.7 : 1.0)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isIconHovered)
+                        .animation(.easeInOut(duration: 0.15), value: isDragging)
                 }
                 
                 // Window count indicators (small dots at bottom)
@@ -75,15 +79,27 @@ struct WindowsTaskbarIcon: View {
             handleTap()
         }
         .onHover { hovering in
-            if hovering && app.isRunning && app.windowCount > 0 {
-                // Show preview after a short delay when hovering
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    if !isDragging {
+            // Update icon hover state for animations - keep it simple and stable
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                isIconHovered = hovering && !isDragging
+            }
+            
+            hoverTimer?.invalidate()
+            
+            if hovering && app.isRunning && app.windowCount > 0 && !isDragging {
+                // Longer delay to prevent flicker and immediate opening/closing
+                hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { _ in
+                    if !isDragging { // Double check we're not dragging
                         showPreview = true
                     }
                 }
-            } else {
-                showPreview = false
+            } else if !hovering {
+                // Hide preview and reset icon size when mouse leaves
+                if showPreview {
+                    hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { _ in
+                        showPreview = false
+                    }
+                }
             }
         }
         .contextMenu {
@@ -102,6 +118,12 @@ struct WindowsTaskbarIcon: View {
                     if !isDragging {
                         isDragging = true
                         showPreview = false // Hide preview when dragging
+                        hoverTimer?.invalidate() // Cancel any pending preview
+                        
+                        // Update icon hover state when dragging starts
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            isIconHovered = false
+                        }
                     }
                     dragOffset = value.translation
                 }
@@ -111,8 +133,18 @@ struct WindowsTaskbarIcon: View {
                     handleDrop(at: value.location)
                 }
         )
-        .popover(isPresented: $showPreview, arrowEdge: .top) {
+        .popover(isPresented: $showPreview, attachmentAnchor: .point(.center), arrowEdge: .top) {
             WindowPreviewView(app: app, appManager: appManager)
+                .onHover { hovering in
+                    // Keep the preview open when hovering over it
+                    hoverTimer?.invalidate()
+                    if !hovering {
+                        // Only close after a delay when mouse leaves the preview
+                        hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
+                            showPreview = false
+                        }
+                    }
+                }
         }
         .help(toolTip)
     }

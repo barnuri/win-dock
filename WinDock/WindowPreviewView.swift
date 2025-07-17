@@ -92,11 +92,12 @@ struct WindowPreviewView: View {
         
         // For now, create mock previews based on window count
         // In a production app, you would use ScreenCaptureKit for real window capture
-        for (index, window) in app.windows.enumerated() {
-            if let image = createPlaceholderPreview(for: window, index: index) {
+        for window in app.windows {
+            if let image = createPlaceholderPreview(for: window, index: 0) {
+                let windowTitle = window.title.isEmpty ? app.name : window.title
                 let preview = WindowPreview(
                     windowID: window.windowID,
-                    title: window.title.isEmpty ? "\(app.name) - Window \(index + 1)" : window.title,
+                    title: windowTitle,
                     image: image,
                     bounds: window.bounds,
                     isMinimized: window.isMinimized

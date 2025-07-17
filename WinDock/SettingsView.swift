@@ -16,6 +16,12 @@ struct SettingsView: View {
     @AppStorage("use24HourClock") private var use24HourClock = true
     @AppStorage("dateFormat") private var dateFormat: DateFormat = .ddMMyyyy
     
+    // Padding settings
+    @AppStorage("paddingTop") private var paddingTop: Double = 0.0
+    @AppStorage("paddingBottom") private var paddingBottom: Double = 0.0
+    @AppStorage("paddingLeft") private var paddingLeft: Double = 0.0
+    @AppStorage("paddingRight") private var paddingRight: Double = 0.0
+    
     @StateObject private var dockManager = MacOSDockManager()
     @StateObject private var settingsManager = SettingsManager()
     
@@ -34,7 +40,11 @@ struct SettingsView: View {
                 showSystemTray: $showSystemTray,
                 showTaskView: $showTaskView,
                 dockManager: dockManager,
-                dateFormat: $dateFormat
+                dateFormat: $dateFormat,
+                paddingTop: $paddingTop,
+                paddingBottom: $paddingBottom,
+                paddingLeft: $paddingLeft,
+                paddingRight: $paddingRight
             )
             .tabItem {
                 Label("General", systemImage: "gear")
@@ -71,8 +81,8 @@ struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 600, height: 600)
-        .frame(maxWidth: .infinity) // Allow settings window to stretch if needed
+        .frame(minWidth: 600, minHeight: 500)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -87,24 +97,29 @@ struct GeneralSettingsView: View {
     @Binding var showTaskView: Bool
     @ObservedObject var dockManager: MacOSDockManager
     @Binding var dateFormat: DateFormat
+    @Binding var paddingTop: Double
+    @Binding var paddingBottom: Double
+    @Binding var paddingLeft: Double
+    @Binding var paddingRight: Double
     
     @AppStorage("searchAppChoice") private var searchAppChoice: SearchAppChoice = .spotlight
     @AppStorage("use24HourClock") private var use24HourClock = true
 
     var body: some View {
-        Form {
-            Section("Taskbar Position") {
-                Picker("Position:", selection: $dockPosition) {
-                    Text("Bottom").tag(DockPosition.bottom)
-                    Text("Top").tag(DockPosition.top)
-                    Text("Left").tag(DockPosition.left)
-                    Text("Right").tag(DockPosition.right)
+        ScrollView {
+            Form {
+                Section("Taskbar Position") {
+                    Picker("Position:", selection: $dockPosition) {
+                        Text("Bottom").tag(DockPosition.bottom)
+                        Text("Top").tag(DockPosition.top)
+                        Text("Left").tag(DockPosition.left)
+                        Text("Right").tag(DockPosition.right)
+                    }
+                    .pickerStyle(RadioGroupPickerStyle())
+                    .onChange(of: dockPosition) { oldValue, newValue in
+                        onDockPositionChange?(newValue)
+                    }
                 }
-                .pickerStyle(RadioGroupPickerStyle())
-                .onChange(of: dockPosition) { oldValue, newValue in
-                    onDockPositionChange?(newValue)
-                }
-            }
             
             Section("Icon Size") {
                 Picker("Icon Size:", selection: $dockSize) {
@@ -162,6 +177,33 @@ struct GeneralSettingsView: View {
                     .foregroundColor(.secondary)
             }
 
+            Section("Taskbar Padding") {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading) {
+                        Text("Top: \(Int(paddingTop))px")
+                        Slider(value: $paddingTop, in: -100...100, step: 1)
+                    }
+                    
+                    VStack(alignment: .leading) {
+                        Text("Bottom: \(Int(paddingBottom))px")
+                        Slider(value: $paddingBottom, in: -100...100, step: 1)
+                    }
+                    
+                    VStack(alignment: .leading) {
+                        Text("Left: \(Int(paddingLeft))px")
+                        Slider(value: $paddingLeft, in: -100...100, step: 1)
+                    }
+                    
+                    VStack(alignment: .leading) {
+                        Text("Right: \(Int(paddingRight))px")
+                        Slider(value: $paddingRight, in: -100...100, step: 1)
+                    }
+                }
+                Text("Adjust spacing around the taskbar edges.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Section("macOS Dock Management") {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
@@ -213,6 +255,7 @@ struct GeneralSettingsView: View {
             }
         }
         .padding()
+        }
     }
 }
 
@@ -250,8 +293,9 @@ struct AppearanceSettingsView: View {
     }
     
     var body: some View {
-        Form {
-            Section("Taskbar Appearance") {
+        ScrollView {
+            Form {
+                Section("Taskbar Appearance") {
                 Toggle("Combine taskbar buttons", isOn: $combineTaskbarButtons)
                 Text("When taskbar is full")
                     .font(.caption)
@@ -323,6 +367,7 @@ struct AppearanceSettingsView: View {
             }
         }
         .padding()
+        }
     }
 }
 
@@ -332,10 +377,11 @@ struct AppsSettingsView: View {
     @AppStorage("defaultTerminal") private var defaultTerminal = "com.apple.Terminal"
     
     var body: some View {
-        VStack(alignment: .leading) {
-            Text("App Management")
-                .font(.headline)
-                .padding(.bottom)
+        ScrollView {
+            VStack(alignment: .leading) {
+                Text("App Management")
+                    .font(.headline)
+                    .padding(.bottom)
             
             Form {
                 Section("Default Applications") {
@@ -376,6 +422,7 @@ struct AppsSettingsView: View {
             }
         }
         .padding()
+        }
     }
 }
 
@@ -391,7 +438,8 @@ struct LogsSettingsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
             Text("Logs")
                 .font(.headline)
             
@@ -439,6 +487,7 @@ struct LogsSettingsView: View {
             Spacer()
         }
         .padding()
+        }
     }
 }
 
@@ -452,7 +501,8 @@ struct AboutView: View {
     }
     
     var body: some View {
-        VStack(spacing: 20) {
+        ScrollView {
+            VStack(spacing: 20) {
             Image(systemName: "dock.rectangle")
                 .font(.system(size: 72))
                 .foregroundStyle(
@@ -501,6 +551,7 @@ struct AboutView: View {
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 
@@ -540,7 +591,8 @@ struct SettingsImportExportView: View {
     @State private var showResetConfirmation = false
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
             Text("Settings Backup & Restore")
                 .font(.headline)
             
@@ -625,6 +677,7 @@ struct SettingsImportExportView: View {
             .foregroundColor(.secondary)
         }
         .padding()
+        }
         .alert("Reset Settings", isPresented: $showResetConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Reset", role: .destructive) {

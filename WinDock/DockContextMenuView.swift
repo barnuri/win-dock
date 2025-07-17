@@ -71,9 +71,7 @@ struct DockContextMenuView: View {
     }
     
     private func openSettings() {
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            appDelegate.openSettings()
-        }
+        AppDelegate.openSettingsWindow()
     }
     
     private func quitWinDock() {
