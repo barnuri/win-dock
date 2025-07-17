@@ -30,13 +30,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var dockWindows: [DockWindow] = []
     var statusBarItem: NSStatusItem?
     var settingsWindowObserver: NSObjectProtocol?
-    var dockPosition: DockPosition = .bottom
+    @AppStorage("dockPosition") var dockPosition: DockPosition = .bottom
+    private var isUpdatingDockWindows = false
+    private var lastDockPosition: DockPosition = .bottom
+    private var lastDockSize: String = "medium"
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         setGlobalErrorHandlers()
+        
+        // Initialize tracking variables
+        lastDockPosition = dockPosition
+        lastDockSize = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
+        
         setupStatusBarItem()
         setupDockWindowsForAllScreens()
         NotificationCenter.default.addObserver(self, selector: #selector(screenParametersDidChange), name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(userDefaultsDidChange), name: UserDefaults.didChangeNotification, object: nil)
     }
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -99,8 +108,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Centralized frame calculation for dock position
     func dockFrame(for position: DockPosition, screen: NSScreen) -> NSRect {
         let screenFrame = screen.visibleFrame
-        let dockHeight: CGFloat = 64
-        let dockWidth: CGFloat = min(600, screenFrame.width * 0.6)
+        let dockHeight: CGFloat = getDockHeight()
+        
         switch position {
         case .bottom:
             return NSRect(
@@ -119,33 +128,53 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .left:
             return NSRect(
                 x: screenFrame.minX,
-                y: screenFrame.midY - dockWidth / 2,
+                y: screenFrame.minY,
                 width: dockHeight,
-                height: dockWidth
+                height: screenFrame.height
             )
         case .right:
             return NSRect(
                 x: screenFrame.maxX - dockHeight,
-                y: screenFrame.midY - dockWidth / 2,
+                y: screenFrame.minY,
                 width: dockHeight,
-                height: dockWidth
+                height: screenFrame.height
             )
+        }
+    }
+    
+    private func getDockHeight() -> CGFloat {
+        let dockSize = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
+        switch dockSize {
+        case "small": return 48
+        case "medium": return 56
+        case "large": return 64
+        default: return 56
         }
     }
 
     private func setupDockWindowsForAllScreens() {
-        // Remove old windows
+        // Prevent multiple simultaneous updates
+        guard !isUpdatingDockWindows else { return }
+        isUpdatingDockWindows = true
+        
+        // Remove old windows more thoroughly
         for window in dockWindows {
+            window.orderOut(nil)
             window.close()
         }
         dockWindows.removeAll()
-        // Create a DockWindow for each screen
-        for screen in NSScreen.screens {
-            let dockWindow = DockWindow()
-            let frame = dockFrame(for: dockPosition, screen: screen)
-            dockWindow.setFrame(frame, display: true)
-            dockWindow.show()
-            dockWindows.append(dockWindow)
+        
+        // Small delay to ensure windows are fully closed
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            // Create a DockWindow for each screen
+            for screen in NSScreen.screens {
+                let dockWindow = DockWindow()
+                let frame = self.dockFrame(for: self.dockPosition, screen: screen)
+                dockWindow.setFrame(frame, display: true)
+                dockWindow.show()
+                self.dockWindows.append(dockWindow)
+            }
+            self.isUpdatingDockWindows = false
         }
     }
 
@@ -164,6 +193,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func screenParametersDidChange() {
         setupDockWindowsForAllScreens()
+    }
+    
+    @objc private func userDefaultsDidChange() {
+        // Only update if dock-related settings have changed
+        let currentDockSize = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
+        
+        if dockPosition != lastDockPosition || currentDockSize != lastDockSize {
+            lastDockPosition = dockPosition
+            lastDockSize = currentDockSize
+            
+            DispatchQueue.main.async {
+                self.setupDockWindowsForAllScreens()
+                self.setupStatusBarItem() // update menu checkmarks
+            }
+        }
     }
     
     @objc func openSettingsMenu() {

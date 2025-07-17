@@ -2,11 +2,40 @@ import SwiftUI
 import AppKit
 import IOKit.ps
 
+enum DateFormat: String, CaseIterable {
+    case ddMMyyyy = "dd/MM/yyyy"
+    case mmDDyyyy = "MM/dd/yyyy"
+    case yyyyMMdd = "yyyy-MM-dd"
+    case ddMMyyyy_dash = "dd-MM-yyyy"
+    case mmDDyyyy_dash = "MM-dd-yyyy"
+    
+    var displayName: String {
+        switch self {
+        case .ddMMyyyy: return "DD/MM/YYYY"
+        case .mmDDyyyy: return "MM/DD/YYYY"
+        case .yyyyMMdd: return "YYYY-MM-DD"
+        case .ddMMyyyy_dash: return "DD-MM-YYYY"
+        case .mmDDyyyy_dash: return "MM-DD-YYYY"
+        }
+    }
+    
+    var dateFormatString: String {
+        return self.rawValue
+    }
+    
+    func formattedDate(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = self.dateFormatString
+        return formatter.string(from: date)
+    }
+}
+
 struct SystemTrayView: View {
     @State private var currentTime = Date()
     @State private var batteryInfo = BatteryInfo()
     @AppStorage("use24HourClock") private var use24HourClock = true
     @AppStorage("showSystemTray") private var showSystemTray = true
+    @AppStorage("dateFormat") private var dateFormat: DateFormat = .ddMMyyyy
     
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
@@ -25,7 +54,7 @@ struct SystemTrayView: View {
                 VolumeIndicatorView()
                 
                 // Date and time
-                DateTimeView(currentTime: currentTime, use24HourClock: use24HourClock)
+                DateTimeView(currentTime: currentTime, use24HourClock: use24HourClock, dateFormat: dateFormat)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -357,6 +386,7 @@ struct VolumeDetailsView: View {
 struct DateTimeView: View {
     let currentTime: Date
     let use24HourClock: Bool
+    let dateFormat: DateFormat
     @State private var showCalendar = false
     
     var body: some View {
@@ -392,9 +422,7 @@ struct DateTimeView: View {
     }
     
     private var dateString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "M/d/yyyy"
-        return formatter.string(from: currentTime)
+        return dateFormat.formattedDate(from: currentTime)
     }
 }
 

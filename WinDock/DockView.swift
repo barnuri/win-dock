@@ -33,9 +33,9 @@ struct DockView: View {
     @ViewBuilder
     private func dockMainContent(geometry: GeometryProxy) -> some View {
         ZStack(alignment: .bottom) {
-            // Modern taskbar background with glass effect
+            // Modern taskbar background with optional transparency
             Rectangle()
-                .fill(.regularMaterial)
+                .fill(backgroundMaterial)
                 .opacity(taskbarTransparency)
                 .frame(width: geometry.size.width, height: 54)
                 .overlay(
@@ -103,7 +103,12 @@ struct DockView: View {
                     Spacer()
                     dockIconsSection
                     Spacer()
+                } else if dockPosition == .bottom || dockPosition == .top {
+                    // Left-aligned icons for horizontal dock
+                    dockIconsSection
+                    Spacer()
                 } else {
+                    // For vertical docks (left/right), always center
                     Spacer(minLength: 12)
                     dockIconsSection
                     Spacer()
@@ -126,13 +131,16 @@ struct DockView: View {
         executeAppleScript(script)
     }
     
-    private func executeAppleScript(_ script: String) {
-        guard let appleScript = NSAppleScript(source: script) else { return }
+    @discardableResult
+    private func executeAppleScript(_ script: String) -> Bool {
+        guard let appleScript = NSAppleScript(source: script) else { return false }
         var error: NSDictionary?
-        appleScript.executeAndReturnError(&error)
+        _ = appleScript.executeAndReturnError(&error)
         if let error = error {
             AppLogger.shared.error("AppleScript error: \(error)")
+            return false
         }
+        return true
     }
 
     @ViewBuilder

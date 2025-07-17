@@ -41,7 +41,6 @@ class AppManager: ObservableObject {
     private let dockAppOrderKey = "WinDock.DockAppOrder"
     private var pinnedBundleIdentifiers: Set<String> = []
     private var dockAppOrder: [String] = []
-    private var accessibilityElement: AXUIElement?
 
     // Default pinned applications - Windows 11 style defaults
     private let defaultPinnedApps = [
@@ -58,7 +57,6 @@ class AppManager: ObservableObject {
     init() {
         loadPinnedApps()
         loadDockAppOrder()
-        setupAccessibility()
         updateDockApps()
     }
 
@@ -73,30 +71,9 @@ class AppManager: ObservableObject {
         }
     }
 
-    private func setupAccessibility() {
-        // Request accessibility permissions if needed
-        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-        let accessEnabled = AXIsProcessTrustedWithOptions(options)
-        
-        if accessEnabled {
-            accessibilityElement = AXUIElementCreateSystemWide()
-        }
-    }
-
     func closeAllWindows(for app: DockApp) {
         guard let runningApp = app.runningApplication else { return }
-        let axApp = AXUIElementCreateApplication(runningApp.processIdentifier)
-        var windows: CFTypeRef?
-        AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windows)
-        if let windowArray = windows as? [AXUIElement] {
-            for window in windowArray {
-                var closeButton: CFTypeRef?
-                AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &closeButton)
-                if let button = closeButton {
-                    AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
-                }
-            }
-        }
+        runningApp.terminate()
     }
 
     func startMonitoring() {
@@ -331,19 +308,6 @@ class AppManager: ObservableObject {
             runningApp.activate()
         } else {
             runningApp.activate(options: [.activateIgnoringOtherApps])
-        }
-        let axApp = AXUIElementCreateApplication(runningApp.processIdentifier)
-        var windows: CFTypeRef?
-        AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windows)
-        if let windowArray = windows as? [AXUIElement] {
-            for window in windowArray {
-                var windowIDRef: CFTypeRef?
-                AXUIElementCopyAttributeValue(window, "_AXWindowNumber" as CFString, &windowIDRef)
-                if let windowNumber = windowIDRef as? Int, windowNumber == windowID {
-                    AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-                    break
-                }
-            }
         }
     }
 

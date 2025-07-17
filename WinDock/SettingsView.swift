@@ -7,7 +7,7 @@ struct SettingsView: View {
         }
         return .bottom
     }()
-    @AppStorage("dockSize") private var dockSize: DockSize = .medium
+    @AppStorage("dockSize") private var dockSize: DockSize = .large
     @AppStorage("autoHide") private var autoHide = false
     @AppStorage("showOnAllSpaces") private var showOnAllSpaces = true
     @AppStorage("centerTaskbarIcons") private var centerTaskbarIcons = true
@@ -19,8 +19,10 @@ struct SettingsView: View {
     @AppStorage("showLabels") private var showLabels = false
     @AppStorage("animationSpeed") private var animationSpeed = 1.0
     @AppStorage("use24HourClock") private var use24HourClock = true
+    @AppStorage("dateFormat") private var dateFormat: DateFormat = .ddMMyyyy
     
     @StateObject private var dockManager = MacOSDockManager()
+    @StateObject private var settingsManager = SettingsManager()
     
     var body: some View {
         TabView {
@@ -37,7 +39,8 @@ struct SettingsView: View {
                 centerTaskbarIcons: $centerTaskbarIcons,
                 showSystemTray: $showSystemTray,
                 showTaskView: $showTaskView,
-                dockManager: dockManager
+                dockManager: dockManager,
+                dateFormat: $dateFormat
             )
             .tabItem {
                 Label("General", systemImage: "gear")
@@ -57,6 +60,11 @@ struct SettingsView: View {
             AppsSettingsView()
                 .tabItem {
                     Label("Apps", systemImage: "app.badge")
+                }
+
+            SettingsImportExportView(settingsManager: settingsManager)
+                .tabItem {
+                    Label("Backup", systemImage: "externaldrive.badge.icloud")
                 }
 
             LogsSettingsView()
@@ -84,6 +92,7 @@ struct GeneralSettingsView: View {
     @Binding var showSystemTray: Bool
     @Binding var showTaskView: Bool
     @ObservedObject var dockManager: MacOSDockManager
+    @Binding var dateFormat: DateFormat
     
     @AppStorage("searchAppChoice") private var searchAppChoice: SearchAppChoice = .spotlight
     @AppStorage("use24HourClock") private var use24HourClock = true
@@ -131,6 +140,18 @@ struct GeneralSettingsView: View {
                 }
                 .pickerStyle(SegmentedPickerStyle())
                 Text("Choose whether the system tray clock uses 24-hour or 12-hour format.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Picker("Date Format:", selection: $dateFormat) {
+                    Text("DD/MM/YYYY").tag(DateFormat.ddMMyyyy)
+                    Text("MM/DD/YYYY").tag(DateFormat.mmDDyyyy)
+                    Text("YYYY-MM-DD").tag(DateFormat.yyyyMMdd)
+                    Text("DD-MM-YYYY").tag(DateFormat.ddMMyyyy_dash)
+                    Text("MM-DD-YYYY").tag(DateFormat.mmDDyyyy_dash)
+                }
+                .pickerStyle(MenuPickerStyle())
+                Text("Choose the date format displayed in the system tray.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -475,9 +496,113 @@ enum DockSize: String, CaseIterable {
     
     var iconSize: CGFloat {
         switch self {
-        case .small: return 32
-        case .medium: return 40
-        case .large: return 48
+        case .small: return 40
+        case .medium: return 48
+        case .large: return 56
+        }
+    }
+}
+
+struct SettingsImportExportView: View {
+    @ObservedObject var settingsManager: SettingsManager
+    @State private var showResetConfirmation = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Settings Backup & Restore")
+                .font(.headline)
+            
+            Text("Export and import your WinDock settings to backup or share your configuration.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            
+            VStack(alignment: .leading, spacing: 16) {
+                Section("Export Settings") {
+                    Text("Save your current settings to a JSON file")
+                        .font(.subheadline)
+                    
+                    Button("Export Settings...") {
+                        settingsManager.exportSettingsToFile()
+                    }
+                    .disabled(settingsManager.isProcessing)
+                    .buttonStyle(.borderedProminent)
+                    
+                    if let status = settingsManager.exportStatus {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundColor(status.contains("successfully") ? .green : .red)
+                    }
+                }
+                
+                Divider()
+                
+                Section("Import Settings") {
+                    Text("Load settings from a previously exported JSON file")
+                        .font(.subheadline)
+                    
+                    Button("Import Settings...") {
+                        settingsManager.importSettingsFromFile()
+                    }
+                    .disabled(settingsManager.isProcessing)
+                    .buttonStyle(.bordered)
+                    
+                    if let status = settingsManager.importStatus {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundColor(status.contains("successfully") ? .green : .red)
+                    }
+                }
+                
+                Divider()
+                
+                Section("Reset to Defaults") {
+                    Text("Reset all settings to their default values")
+                        .font(.subheadline)
+                    
+                    Button("Reset to Defaults") {
+                        showResetConfirmation = true
+                    }
+                    .disabled(settingsManager.isProcessing)
+                    .buttonStyle(.bordered)
+                    .foregroundColor(.red)
+                }
+            }
+            
+            if settingsManager.isProcessing {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Processing...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Spacer()
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Notes:")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                
+                Label("Settings files are saved in JSON format", systemImage: "doc.text")
+                Label("Import will overwrite all current settings", systemImage: "exclamationmark.triangle")
+                Label("The app will automatically restart dock windows after import", systemImage: "arrow.clockwise")
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+        }
+        .padding()
+        .alert("Reset Settings", isPresented: $showResetConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Reset", role: .destructive) {
+                settingsManager.resetToDefaults()
+            }
+        } message: {
+            Text("Are you sure you want to reset all settings to their default values? This action cannot be undone.")
+        }
+        .onAppear {
+            settingsManager.clearStatus()
         }
     }
 }
