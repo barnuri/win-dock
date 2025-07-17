@@ -4,6 +4,10 @@
 <dict>
 	<key>CFBundleIconFile</key>
 	<string></string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.4</string>
+	<key>CFBundleVersion</key>
+	<string>1.0.4</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSHighResolutionCapable</key>
