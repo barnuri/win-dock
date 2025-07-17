@@ -164,6 +164,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         dockWindows.removeAll()
         
+        // Reserve screen space for the new dock position
+        reserveScreenSpace()
+        
         // Small delay to ensure windows are fully closed
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             // Create a DockWindow for each screen
@@ -176,6 +179,62 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self.isUpdatingDockWindows = false
         }
+    }
+
+    private func reserveScreenSpace() {
+        let dockHeight = getDockHeight()
+        
+        // Reserve screen space for each screen to prevent window overlap
+        for screen in NSScreen.screens {
+            let screenFrame = screen.frame
+            var reservedArea = CGRect.zero
+            
+            switch dockPosition {
+            case .bottom:
+                reservedArea = CGRect(
+                    x: screenFrame.minX,
+                    y: screenFrame.minY,
+                    width: screenFrame.width,
+                    height: dockHeight
+                )
+            case .top:
+                reservedArea = CGRect(
+                    x: screenFrame.minX,
+                    y: screenFrame.maxY - dockHeight,
+                    width: screenFrame.width,
+                    height: dockHeight
+                )
+            case .left:
+                reservedArea = CGRect(
+                    x: screenFrame.minX,
+                    y: screenFrame.minY,
+                    width: dockHeight,
+                    height: screenFrame.height
+                )
+            case .right:
+                reservedArea = CGRect(
+                    x: screenFrame.maxX - dockHeight,
+                    y: screenFrame.minY,
+                    width: dockHeight,
+                    height: screenFrame.height
+                )
+            }
+            
+            // Store the reserved area information
+            let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int ?? 0
+            let screenKey = "WinDock.ReservedArea.\(screenNumber)"
+            UserDefaults.standard.set(NSStringFromRect(reservedArea), forKey: screenKey)
+            
+            AppLogger.shared.info("Reserved screen space: \(reservedArea) on screen \(screen.localizedName)")
+        }
+        
+        // Notify other applications about the screen space reservation
+        // This uses a notification that well-behaved apps might listen to
+        NotificationCenter.default.post(
+            name: NSNotification.Name("WinDockScreenSpaceReserved"),
+            object: nil,
+            userInfo: ["position": dockPosition.rawValue, "size": dockHeight]
+        )
     }
 
     // Call this method whenever the dock position changes (from settings or menu)

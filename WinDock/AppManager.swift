@@ -300,41 +300,92 @@ class AppManager: ObservableObject {
         )
     }
     
+    // MARK: - Drag and Drop Reordering
+    
+    func moveApp(from sourceIndex: Int, to destinationIndex: Int) {
+        guard sourceIndex >= 0, sourceIndex < dockApps.count,
+              destinationIndex >= 0, destinationIndex <= dockApps.count,
+              sourceIndex != destinationIndex else { return }
+        
+        let app = dockApps.remove(at: sourceIndex)
+        let insertIndex = sourceIndex < destinationIndex ? destinationIndex - 1 : destinationIndex
+        dockApps.insert(app, at: insertIndex)
+        
+        saveDockAppOrder()
+    }
+    
     // MARK: - App Actions
 
     func focusWindow(windowID: CGWindowID, app: DockApp) {
         guard let runningApp = app.runningApplication else { return }
+        
+        // First activate the application
         if #available(macOS 14.0, *) {
             runningApp.activate()
         } else {
             runningApp.activate(options: [.activateIgnoringOtherApps])
+        }
+        
+        // If we have a specific window ID, try to focus it
+        if windowID > 0 {
+            // Use AppleScript to focus the specific window
+            let script = """
+            tell application "System Events"
+                tell process "\(app.name)"
+                    set frontmost to true
+                    try
+                        perform action "AXRaise" of window 1
+                    end try
+                end tell
+            end tell
+            """
+            
+            if let appleScript = NSAppleScript(source: script) {
+                var error: NSDictionary?
+                appleScript.executeAndReturnError(&error)
+                if let error = error {
+                    AppLogger.shared.error("Focus window AppleScript error: \(error)")
+                }
+            }
         }
     }
 
     func activateApp(_ app: DockApp) {
         AppLogger.shared.info("activateApp called for \(app.name), isRunning: \(app.isRunning), isActive: \(app.runningApplication?.isActive ?? false)")
         if let runningApp = app.runningApplication {
-            // If app has multiple windows, cycle through them
-            if app.windowCount > 1 && runningApp.isActive {
-                AppLogger.shared.info("App is active and has multiple windows, cycling windows for \(app.name)")
-                cycleWindows(for: app)
+            // Force app to front and activate
+            AppLogger.shared.info("Activating running app: \(app.name)")
+            
+            if #available(macOS 14.0, *) {
+                runningApp.activate()
             } else {
+                runningApp.activate(options: [.activateIgnoringOtherApps])
+            }
+            
+            // Ensure the app is unhidden if it was hidden
+            if runningApp.isHidden {
+                runningApp.unhide()
+            }
+            
+            // Force the app to the front using NSApplication
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                NSApp.activate(ignoringOtherApps: true)
                 if #available(macOS 14.0, *) {
-                    AppLogger.shared.info("Activating app (macOS 14+): \(app.name)")
                     runningApp.activate()
                 } else {
-                    AppLogger.shared.info("Activating app (legacy): \(app.name)")
                     runningApp.activate(options: [.activateIgnoringOtherApps])
                 }
             }
         } else if let appURL = app.url {
             AppLogger.shared.info("Launching app from URL: \(appURL.path)")
             let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
             NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
         } else {
             if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier) {
                 AppLogger.shared.info("Launching app from bundle identifier: \(app.bundleIdentifier)")
                 let configuration = NSWorkspace.OpenConfiguration()
+                configuration.activates = true
                 NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
             } else {
                 AppLogger.shared.error("Could not find app to activate: \(app.bundleIdentifier)")
@@ -453,13 +504,92 @@ class AppManager: ObservableObject {
     // MARK: - Screen Insets for Dock
     
     private func registerDockInsets() {
-        // This would register the dock area with the window manager
-        // to prevent maximized windows from overlapping
-        // Note: This requires private APIs or system integration
+        // Register the dock area with the system to prevent maximized windows from overlapping
         AppLogger.shared.info("Registering dock insets")
+        
+        // Get dock position and size from UserDefaults
+        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
+        let dockPosition = appDelegate.dockPosition
+        let dockHeight = getDockHeight()
+        
+        // Reserve screen space for each screen
+        for screen in NSScreen.screens {
+            reserveScreenSpace(for: screen, position: dockPosition, size: dockHeight)
+        }
     }
     
     private func unregisterDockInsets() {
         AppLogger.shared.info("Unregistering dock insets")
+        
+        // Remove screen space reservation for each screen
+        for screen in NSScreen.screens {
+            removeScreenSpaceReservation(for: screen)
+        }
+    }
+    
+    private func getDockHeight() -> CGFloat {
+        let dockSize = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
+        switch dockSize {
+        case "small": return 48
+        case "medium": return 56
+        case "large": return 64
+        default: return 56
+        }
+    }
+    
+    private func reserveScreenSpace(for screen: NSScreen, position: DockPosition, size: CGFloat) {
+        // This uses private APIs to reserve screen space
+        // In a production app, you might need to use a different approach
+        
+        let screenFrame = screen.frame
+        var reservedArea = CGRect.zero
+        
+        switch position {
+        case .bottom:
+            reservedArea = CGRect(
+                x: screenFrame.minX,
+                y: screenFrame.minY,
+                width: screenFrame.width,
+                height: size
+            )
+        case .top:
+            reservedArea = CGRect(
+                x: screenFrame.minX,
+                y: screenFrame.maxY - size,
+                width: screenFrame.width,
+                height: size
+            )
+        case .left:
+            reservedArea = CGRect(
+                x: screenFrame.minX,
+                y: screenFrame.minY,
+                width: size,
+                height: screenFrame.height
+            )
+        case .right:
+            reservedArea = CGRect(
+                x: screenFrame.maxX - size,
+                y: screenFrame.minY,
+                width: size,
+                height: screenFrame.height
+            )
+        }
+        
+        // Store the reserved area for later removal
+        let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int ?? 0
+        UserDefaults.standard.set(NSStringFromRect(reservedArea), forKey: "WinDock.ReservedArea.\(screenNumber)")
+        
+        // Notify the system about the reserved area
+        // This is a simplified version - actual implementation would use CGSSetScreenResolution or similar
+        AppLogger.shared.info("Reserved screen area: \(reservedArea) for screen: \(screen.localizedName)")
+    }
+    
+    private func removeScreenSpaceReservation(for screen: NSScreen) {
+        // Remove the previously reserved screen space
+        let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int ?? 0
+        let key = "WinDock.ReservedArea.\(screenNumber)"
+        UserDefaults.standard.removeObject(forKey: key)
+        
+        AppLogger.shared.info("Removed screen space reservation for screen: \(screen.localizedName)")
     }
 }

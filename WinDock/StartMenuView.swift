@@ -109,6 +109,32 @@ struct StartMenuView: View {
             
             Divider()
             
+            // App Options
+            VStack(alignment: .leading, spacing: 4) {
+                Text("WinDock")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                
+                VStack(spacing: 2) {
+                    StartMenuButton(
+                        title: "Settings",
+                        icon: "gearshape.fill",
+                        action: openWinDockSettings
+                    )
+                    
+                    StartMenuButton(
+                        title: "Quit WinDock",
+                        icon: "xmark.circle.fill",
+                        action: quitWinDock
+                    )
+                }
+            }
+            .padding(.bottom, 8)
+            
+            Divider()
+            
             // Power Options
             VStack(alignment: .leading, spacing: 4) {
                 Text("Power")
@@ -267,6 +293,20 @@ struct StartMenuView: View {
         """
         executeAppleScript(script)
         dismiss()
+    }
+    
+    private func openWinDockSettings() {
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.openSettings()
+        }
+        dismiss()
+    }
+    
+    private func quitWinDock() {
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NSApplication.shared.terminate(nil)
+        }
     }
     
     private func sleep() {

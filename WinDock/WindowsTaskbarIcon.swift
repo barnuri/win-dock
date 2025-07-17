@@ -8,19 +8,18 @@ struct WindowsTaskbarIcon: View {
     let appManager: AppManager
 
     @AppStorage("showLabels") private var showLabels = false
+    @State private var showPreview = false
+    @State private var previewPosition: CGPoint = .zero
+    @State private var isDragging = false
+    @State private var dragOffset = CGSize.zero
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
-                // Background with Windows 11 style
+                // Simple background without highlighting
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(backgroundFill)
+                    .fill(Color.clear)
                     .frame(width: 48, height: 40)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(borderColor, lineWidth: 1)
-                    )
-                    .shadow(color: shadowColor, radius: shadowRadius, x: 0, y: 1)
                 
                 // App icon
                 if let icon = app.icon {
@@ -28,6 +27,8 @@ struct WindowsTaskbarIcon: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(width: iconSize * 0.7, height: iconSize * 0.7)
+                        .scaleEffect(isDragging ? 0.9 : 1.0)
+                        .opacity(isDragging ? 0.7 : 1.0)
                 }
                 
                 // Window count indicators (small dots at bottom)
@@ -68,21 +69,26 @@ struct WindowsTaskbarIcon: View {
             }
         }
         .frame(width: 54, height: showLabels ? 72 : 54)
+        .offset(dragOffset)
         .contentShape(Rectangle())
         .onTapGesture {
             handleTap()
         }
+        .onHover { hovering in
+            if hovering && app.isRunning && app.windowCount > 0 {
+                // Show preview after a short delay when hovering
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    if !isDragging {
+                        showPreview = true
+                    }
+                }
+            } else {
+                showPreview = false
+            }
+        }
         .contextMenu {
             AppContextMenuView(app: app, appManager: appManager)
         }
-        .scaleEffect(isPressed ? 0.95 : 1.0)
-        .animation(.easeInOut(duration: 0.1), value: isPressed)
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity, pressing: { pressing in
-            withAnimation(.easeInOut(duration: 0.1)) {
-                isPressed = pressing
-            }
-        }, perform: {})
         .simultaneousGesture(
             TapGesture(count: 2).onEnded { _ in
                 if app.isRunning {
@@ -90,79 +96,27 @@ struct WindowsTaskbarIcon: View {
                 }
             }
         )
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 10, coordinateSpace: .global)
+                .onChanged { value in
+                    if !isDragging {
+                        isDragging = true
+                        showPreview = false // Hide preview when dragging
+                    }
+                    dragOffset = value.translation
+                }
+                .onEnded { value in
+                    isDragging = false
+                    dragOffset = .zero
+                    handleDrop(at: value.location)
+                }
+        )
+        .popover(isPresented: $showPreview, arrowEdge: .top) {
+            WindowPreviewView(app: app, appManager: appManager)
+        }
         .help(toolTip)
     }
 
-    private var backgroundFill: some ShapeStyle {
-        if isPressed {
-            return AnyShapeStyle(
-                LinearGradient(
-                    colors: [
-                        Color.accentColor.opacity(0.3),
-                        Color.accentColor.opacity(0.2)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-        }
-        if isHovered {
-            return AnyShapeStyle(
-                LinearGradient(
-                    colors: [
-                        Color.accentColor.opacity(0.15),
-                        Color.accentColor.opacity(0.1)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-        }
-        if app.isRunning {
-            return AnyShapeStyle(
-                LinearGradient(
-                    colors: [
-                        Color.accentColor.opacity(0.08),
-                        Color.accentColor.opacity(0.05)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-        }
-        return AnyShapeStyle(Color.clear)
-    }
-    
-    private var borderColor: Color {
-        if isHovered {
-            return Color.accentColor.opacity(0.4)
-        }
-        if app.isRunning {
-            return Color.accentColor.opacity(0.2)
-        }
-        return Color.clear
-    }
-    
-    private var shadowColor: Color {
-        if isPressed {
-            return Color.black.opacity(0.1)
-        }
-        if isHovered {
-            return Color.black.opacity(0.08)
-        }
-        return Color.clear
-    }
-    
-    private var shadowRadius: CGFloat {
-        if isPressed {
-            return 1
-        }
-        if isHovered {
-            return 3
-        }
-        return 0
-    }
-    
     private var runningIndicatorColor: Color {
         if app.runningApplication?.isActive == true {
             return Color.accentColor
@@ -194,19 +148,34 @@ struct WindowsTaskbarIcon: View {
         return tooltip
     }
     
+    private func handleDrop(at location: CGPoint) {
+        // Find the target position in the dock
+        if let window = NSApp.windows.first(where: { $0.contentView?.subviews.contains { $0 is NSHostingView<DockView> } != nil }) {
+            // Convert global coordinates to window coordinates
+            let windowLocation = window.convertPoint(fromScreen: location)
+            
+            // Notify the dock view about the drop
+            NotificationCenter.default.post(
+                name: NSNotification.Name("DockIconDropped"),
+                object: nil,
+                userInfo: [
+                    "app": app,
+                    "location": NSValue(point: windowLocation)
+                ]
+            )
+        }
+    }
+    
     private func handleTap() {
-        // Windows 11 taskbar behavior
+        AppLogger.shared.info("WindowsTaskbarIcon handleTap for \(app.name)")
+        
         if app.isRunning {
             if let runningApp = app.runningApplication {
-                if runningApp.isActive {
-                    // If app is active, minimize/hide or cycle windows
-                    if app.windowCount > 1 {
-                        appManager.cycleWindows(for: app)
-                    } else {
-                        appManager.hideApp(app)
-                    }
+                if runningApp.isActive && app.windowCount <= 1 {
+                    // If single window app is already active, minimize it
+                    appManager.hideApp(app)
                 } else {
-                    // If app is not active, bring it to front
+                    // Always try to activate and bring to front
                     appManager.activateApp(app)
                 }
             }

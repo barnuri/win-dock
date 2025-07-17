@@ -16,6 +16,14 @@ struct AppContextMenuView: View {
     @ViewBuilder
     private var menuContent: some View {
         if app.isRunning {
+            if app.windowCount > 1 {
+                Button("Show Window Previews") {
+                    // This would need to be handled by the parent view
+                    // For now, just show all windows
+                    appManager.showAllWindows(for: app)
+                }
+            }
+            
             Button("Show All Windows") {
                 appManager.showAllWindows(for: app)
             }

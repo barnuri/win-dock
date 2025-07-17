@@ -3,11 +3,11 @@ import AppKit
 
 struct DockView: View {
     @StateObject private var appManager = AppManager()
-    @State private var hoveredApp: DockApp?
     @State private var showingPreview = false
     @State private var previewWindow: NSWindow?
     @State private var draggedApp: DockApp?
     @State private var showStartMenu = false
+    @State private var dropInsertionIndex: Int?
     @AppStorage("dockPosition") private var dockPosition: DockPosition = .bottom
     @AppStorage("dockSize") private var dockSize: DockSize = .medium
     @AppStorage("centerTaskbarIcons") private var centerTaskbarIcons = true
@@ -24,9 +24,11 @@ struct DockView: View {
         .background(Color.clear)
         .onAppear {
             appManager.startMonitoring()
+            setupDropHandler()
         }
         .onDisappear {
             appManager.stopMonitoring()
+            removeDropHandler()
         }
     }
     
@@ -157,43 +159,118 @@ struct DockView: View {
         return true
     }
 
+    private func setupDropHandler() {
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("DockIconDropped"),
+            object: nil,
+            queue: .main
+        ) { notification in
+            handleIconDrop(notification)
+        }
+    }
+    
+    private func removeDropHandler() {
+        NotificationCenter.default.removeObserver(self, name: NSNotification.Name("DockIconDropped"), object: nil)
+    }
+    
+    private func handleIconDrop(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let droppedApp = userInfo["app"] as? DockApp,
+              let locationValue = userInfo["location"] as? NSValue else { return }
+        
+        let location = locationValue.pointValue
+        
+        // Calculate drop position
+        if let fromIndex = appManager.dockApps.firstIndex(of: droppedApp) {
+            let toIndex = calculateDropIndex(at: location)
+            if fromIndex != toIndex {
+                // Add visual feedback
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    dropInsertionIndex = toIndex
+                }
+                
+                // Perform the move after a short delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    appManager.moveApp(from: fromIndex, to: toIndex)
+                    
+                    // Clear the visual feedback
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        dropInsertionIndex = nil
+                    }
+                }
+            }
+        }
+    }
+    
+    private func calculateDropIndex(at location: CGPoint) -> Int {
+        let iconWidth: CGFloat = 56 // Icon width + spacing
+        let startX: CGFloat = centerTaskbarIcons ? (NSScreen.main?.frame.width ?? 1920) / 2 - CGFloat(appManager.dockApps.count * 28) : 120
+        
+        if dockPosition == .bottom || dockPosition == .top {
+            let relativeX = location.x - startX
+            let index = max(0, Int((relativeX + iconWidth/2) / iconWidth))
+            return min(index, appManager.dockApps.count)
+        } else {
+            // For vertical docks
+            let iconHeight: CGFloat = 56
+            let startY: CGFloat = 100 // Approximate start position
+            let relativeY = location.y - startY
+            let index = max(0, Int((relativeY + iconHeight/2) / iconHeight))
+            return min(index, appManager.dockApps.count)
+        }
+    }
+
     @ViewBuilder
     private var dockIconsSection: some View {
         if dockPosition == .bottom || dockPosition == .top {
             HStack(spacing: 2) {
-                ForEach(appManager.dockApps) { app in
+                ForEach(Array(appManager.dockApps.enumerated()), id: \.element.id) { index, app in
                     WindowsTaskbarIcon(
                         app: app,
-                        isHovered: hoveredApp?.id == app.id,
+                        isHovered: false,
                         iconSize: dockSize.iconSize,
                         appManager: appManager
                     )
-                    .onHover { hovering in
-                        if hovering {
-                            hoveredApp = app
-                        } else if hoveredApp?.id == app.id {
-                            hoveredApp = nil
-                        }
-                    }
+                    .background(
+                        // Drop indicator
+                        Rectangle()
+                            .fill(Color.accentColor.opacity(0.3))
+                            .frame(width: 2)
+                            .opacity(dropInsertionIndex == index ? 1.0 : 0.0)
+                            .offset(x: -28)
+                    )
                 }
+                
+                // Final drop indicator
+                Rectangle()
+                    .fill(Color.accentColor.opacity(0.3))
+                    .frame(width: 2, height: 40)
+                    .opacity(dropInsertionIndex == appManager.dockApps.count ? 1.0 : 0.0)
             }
         } else {
             VStack(spacing: 2) {
-                ForEach(appManager.dockApps) { app in
+                ForEach(Array(appManager.dockApps.enumerated()), id: \.element.id) { index, app in
                     WindowsTaskbarIcon(
                         app: app,
-                        isHovered: hoveredApp?.id == app.id,
+                        isHovered: false,
                         iconSize: dockSize.iconSize,
                         appManager: appManager
                     )
-                    .onHover { hovering in
-                        if hovering {
-                            hoveredApp = app
-                        } else if hoveredApp?.id == app.id {
-                            hoveredApp = nil
-                        }
-                    }
+                    .background(
+                        // Drop indicator for vertical dock
+                        Rectangle()
+                            .fill(Color.accentColor.opacity(0.3))
+                            .frame(height: 2)
+                            .opacity(dropInsertionIndex == index ? 1.0 : 0.0)
+                            .offset(y: -28)
+                    )
                 }
+                
+                // Final drop indicator for vertical dock
+                Rectangle()
+                    .fill(Color.accentColor.opacity(0.3))
+                    .frame(width: 40, height: 2)
+                    .opacity(dropInsertionIndex == appManager.dockApps.count ? 1.0 : 0.0)
             }
         }
     }

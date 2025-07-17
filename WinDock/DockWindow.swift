@@ -148,7 +148,7 @@ class DockWindow: NSPanel {
             )
             item.representedObject = position.rawValue
             item.target = self
-            item.state = position == appDelegate.dockPosition ? .on : .off
+            item.state = position.rawValue == appDelegate.dockPosition.rawValue ? .on : .off
             positionMenu.addItem(item)
         }
         let positionItem = NSMenuItem(title: "Taskbar Position", action: nil, keyEquivalent: "")

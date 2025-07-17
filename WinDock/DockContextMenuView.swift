@@ -20,6 +20,14 @@ struct DockContextMenuView: View {
                 openSettings()
             }
             
+            Divider()
+            
+            Button("Quit WinDock") {
+                quitWinDock()
+            }
+            
+            Divider()
+            
             Button("Lock") {
                 lockScreen()
             }
@@ -66,6 +74,10 @@ struct DockContextMenuView: View {
         if let appDelegate = NSApp.delegate as? AppDelegate {
             appDelegate.openSettings()
         }
+    }
+    
+    private func quitWinDock() {
+        NSApplication.shared.terminate(nil)
     }
     
     private func lockScreen() {
