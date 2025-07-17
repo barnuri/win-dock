@@ -111,7 +111,7 @@ jobs:
         ln -sf /Applications dmg_temp/Applications
         
         # Create the DMG file
-        DMG_NAME="WinDock-${{ steps.new_version.outputs.new_version }}.dmg"
+        DMG_NAME="WinDock.dmg"
         hdiutil create -volname "WinDock ${{ steps.new_version.outputs.new_version }}" \
           -srcfolder dmg_temp \
           -ov \
@@ -167,7 +167,7 @@ jobs:
         
         ## Installation
         
-        1. Download \`WinDock-${{ steps.new_version.outputs.new_version }}.dmg\`
+        1. Download \`WinDock.dmg\`
         2. Open the DMG file
         3. Drag \`WinDock.app\` to the Applications folder
         4. Run the app from Applications
@@ -191,7 +191,7 @@ jobs:
         TAG_NAME="${{ steps.create_tag.outputs.tag_name }}"
         RELEASE_NAME="WinDock ${{ steps.new_version.outputs.new_version }}"
         BODY_PATH="release_notes.md"
-        DMG_FILE="WinDock-${{ steps.new_version.outputs.new_version }}.dmg"
+        DMG_FILE="WinDock.dmg"
         APP_FILE="WinDock.app"
 
         # Check if release already exists

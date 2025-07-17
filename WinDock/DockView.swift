@@ -227,7 +227,6 @@ struct DockView: View {
                 ForEach(Array(appManager.dockApps.enumerated()), id: \.element.id) { index, app in
                     WindowsTaskbarIcon(
                         app: app,
-                        isHovered: false,
                         iconSize: dockSize.iconSize,
                         appManager: appManager
                     )
@@ -252,7 +251,6 @@ struct DockView: View {
                 ForEach(Array(appManager.dockApps.enumerated()), id: \.element.id) { index, app in
                     WindowsTaskbarIcon(
                         app: app,
-                        isHovered: false,
                         iconSize: dockSize.iconSize,
                         appManager: appManager
                     )

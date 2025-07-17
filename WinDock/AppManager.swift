@@ -139,6 +139,13 @@ class AppManager: ObservableObject {
         }
     }
     
+    // Public function to trigger update from outside
+    func updateDockAppsIfNeeded() {
+        Task { @MainActor in
+            updateDockApps()
+        }
+    }
+    
     private func updateDockApps() {
         let runningApps = NSWorkspace.shared.runningApplications
             .filter { app in
