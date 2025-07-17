@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-
 import Foundation
 import Darwin
 
@@ -105,16 +104,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         switch position {
         case .bottom:
             return NSRect(
-                x: screenFrame.midX - dockWidth / 2,
-                y: screenFrame.minY,
-                width: dockWidth,
+                x: screenFrame.minX,
+                y: 0,
+                width: screenFrame.width,
                 height: dockHeight
             )
         case .top:
             return NSRect(
-                x: screenFrame.midX - dockWidth / 2,
+                x: screenFrame.minX,
                 y: screenFrame.maxY - dockHeight,
-                width: dockWidth,
+                width: screenFrame.width,
                 height: dockHeight
             )
         case .left:
@@ -206,6 +205,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 enum DockPosition: String, CaseIterable {
     case bottom, top, left, right
+    
     var displayName: String {
         switch self {
         case .bottom: return "Bottom"

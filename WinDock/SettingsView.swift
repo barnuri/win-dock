@@ -15,7 +15,7 @@ struct SettingsView: View {
     @AppStorage("showTaskView") private var showTaskView = true
     @AppStorage("combineTaskbarButtons") private var combineTaskbarButtons = true
     @AppStorage("useSmallTaskbarButtons") private var useSmallTaskbarButtons = false
-    @AppStorage("taskbarTransparency") private var taskbarTransparency = 0.8
+    @AppStorage("taskbarTransparency") private var taskbarTransparency = 0.95
     @AppStorage("showLabels") private var showLabels = false
     @AppStorage("animationSpeed") private var animationSpeed = 1.0
     @AppStorage("use24HourClock") private var use24HourClock = true

@@ -9,9 +9,6 @@ import IOKit
 import IOKit.ps
 #endif
 
-// ...existing code...
-
-
 class DockWindow: NSPanel {
     private var isPreview: Bool {
         ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"

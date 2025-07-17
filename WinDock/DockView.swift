@@ -15,7 +15,7 @@ struct DockView: View {
     @AppStorage("showTaskView") private var showTaskView = true
     @AppStorage("showLabels") private var showLabels = false
     @AppStorage("useSmallTaskbarButtons") private var useSmallTaskbarButtons = false
-    @AppStorage("taskbarTransparency") private var taskbarTransparency = 1.0 // Set to solid
+    @AppStorage("taskbarTransparency") private var taskbarTransparency = 0.95
 
     var body: some View {
         GeometryReader { geometry in
@@ -33,45 +33,112 @@ struct DockView: View {
     @ViewBuilder
     private func dockMainContent(geometry: GeometryProxy) -> some View {
         ZStack(alignment: .bottom) {
+            // Modern taskbar background with glass effect
             Rectangle()
-                .fill(Color(.windowBackgroundColor).opacity(0.95))
+                .fill(.regularMaterial)
+                .opacity(taskbarTransparency)
                 .frame(width: geometry.size.width, height: 54)
-                .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 2)
                 .overlay(
                     Rectangle()
-                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.1),
+                                    Color.clear,
+                                    Color.black.opacity(0.05)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
                 )
+                .overlay(
+                    Rectangle()
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.2),
+                                    Color.clear,
+                                    Color.black.opacity(0.1)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 1
+                        )
+                )
+                .shadow(color: Color.black.opacity(0.15), radius: 8, x: 0, y: -2)
                 .contentShape(Rectangle())
-                .onTapGesture(count: 2) {
-                    // Double-click fallback (optional)
-                }
                 .onTapGesture {
-                    if NSEvent.modifierFlags.contains(.control) {
-                        showDockMenu(at: NSEvent.mouseLocation)
-                    }
+                    // Single click - do nothing or handle focus
                 }
-            HStack(spacing: 4) {
-                dockIconsSection
+                .simultaneousGesture(
+                    TapGesture(count: 2).onEnded { _ in
+                        // Double-click to show desktop
+                        showDesktop()
+                    }
+                )
+                .contextMenu {
+                    DockContextMenuView(appManager: appManager)
+                }
+            
+            // Main taskbar content
+            HStack(spacing: 0) {
+                // Left side - Start button
+                HStack(spacing: 4) {
+                    StartButton()
+                    
+                    // Task View button (optional)
+                    if showTaskView {
+                        TaskViewButton()
+                    }
+                    
+                    // Search button (optional)
+                    SearchButton()
+                }
+                .padding(.leading, 8)
+                
+                // Center - App icons
+                if centerTaskbarIcons && (dockPosition == .bottom || dockPosition == .top) {
+                    Spacer()
+                    dockIconsSection
+                    Spacer()
+                } else {
+                    Spacer(minLength: 12)
+                    dockIconsSection
+                    Spacer()
+                }
+                
+                // Right side - System tray
+                SystemTrayView()
+                    .padding(.trailing, 8)
             }
             .frame(width: geometry.size.width, height: 54)
         }
     }
-    private func showDockMenu(at location: CGPoint) {
-        let menu = NSMenu()
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(AppDelegate.openSettingsMenu), keyEquivalent: "")
-        settingsItem.target = NSApp.delegate
-        menu.addItem(settingsItem)
-        menu.addItem(NSMenuItem.separator())
-        let quitItem = NSMenuItem(title: "Quit Win Dock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        quitItem.target = NSApp
-        menu.addItem(quitItem)
-        menu.popUp(positioning: nil, at: location, in: nil)
+    
+    private func showDesktop() {
+        let script = """
+        tell application "System Events"
+            key code 103 using {command down}
+        end tell
+        """
+        executeAppleScript(script)
+    }
+    
+    private func executeAppleScript(_ script: String) {
+        guard let appleScript = NSAppleScript(source: script) else { return }
+        var error: NSDictionary?
+        appleScript.executeAndReturnError(&error)
+        if let error = error {
+            AppLogger.shared.error("AppleScript error: \(error)")
+        }
     }
 
     @ViewBuilder
     private var dockIconsSection: some View {
         if dockPosition == .bottom || dockPosition == .top {
-            HStack(spacing: 4) {
+            HStack(spacing: 2) {
                 ForEach(appManager.dockApps) { app in
                     WindowsTaskbarIcon(
                         app: app,
@@ -82,12 +149,14 @@ struct DockView: View {
                     .onHover { hovering in
                         if hovering {
                             hoveredApp = app
+                        } else if hoveredApp?.id == app.id {
+                            hoveredApp = nil
                         }
                     }
                 }
             }
         } else {
-            VStack(spacing: 4) {
+            VStack(spacing: 2) {
                 ForEach(appManager.dockApps) { app in
                     WindowsTaskbarIcon(
                         app: app,
@@ -98,6 +167,8 @@ struct DockView: View {
                     .onHover { hovering in
                         if hovering {
                             hoveredApp = app
+                        } else if hoveredApp?.id == app.id {
+                            hoveredApp = nil
                         }
                     }
                 }
