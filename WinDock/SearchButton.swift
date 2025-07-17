@@ -59,12 +59,13 @@ struct SearchButton: View {
     }
     
     private func openSpotlight() {
-        let script = """
-        tell application "System Events"
-            key code 49 using {command down}
-        end tell
-        """
-        executeAppleScript(script)
+        if let spotlightURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Spotlight") {
+            NSWorkspace.shared.open(spotlightURL)
+        } else {
+            // Fallback to AppleScript if direct launch fails
+            let script = "tell application \"System Events\" to keystroke space using {command down}"
+            executeAppleScript(script)
+        }
     }
     
     private func openRaycast() {

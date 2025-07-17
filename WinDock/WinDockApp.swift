@@ -20,6 +20,14 @@ struct WinDockApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     var body: some Scene {
+        WindowGroup("ReservedPlace") {
+            ReservedPlace()
+                .frame(width: 0, height: 0)
+                .opacity(0)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        
         Settings {
             SettingsView()
         }
@@ -183,6 +191,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Reserve screen space for the new dock position
         reserveScreenSpace()
+        
+        // Notify ReservedPlace to update its position if needed
+        NotificationCenter.default.post(
+            name: NSNotification.Name("WinDockPositionChanged"),
+            object: nil,
+            userInfo: nil
+        )
         
         // Small delay to ensure windows are fully closed
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {

@@ -7,30 +7,17 @@ struct WindowsTaskbarIcon: View {
     let appManager: AppManager
 
     @AppStorage("showLabels") private var showLabels = false
-    @State private var showPreview = false
-    @State private var isDragging = false
-    @State private var dragOffset = CGSize.zero
-    @State private var hoverTimer: Timer?
-    @State private var isIconHovered = false
+    @State private var isHovering = false
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
-                // Windows 11 style highlight on hover
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(isIconHovered && !isDragging ? 
-                          Color(NSColor.controlBackgroundColor).opacity(0.5) : 
-                          Color.clear)
-                    .frame(width: 44, height: 36)
-                
-                // App icon - no scaling on hover (Windows 11 style)
+                // Simple app icon without hover effects
                 if let icon = app.icon {
                     Image(nsImage: icon)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(width: iconSize * 0.7, height: iconSize * 0.7)
-                        .scaleEffect(isDragging ? 0.9 : 1.0)
-                        .opacity(isDragging ? 0.7 : 1.0)
                 }
                 
                 // Window count indicators (small dots at bottom)
@@ -63,47 +50,17 @@ struct WindowsTaskbarIcon: View {
             }
         }
         .frame(width: 54, height: showLabels ? 72 : 54)
-        .offset(dragOffset)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(
+                    app.runningApplication?.isActive == true ? 
+                        Color.blue.opacity(0.3) : 
+                        (isHovering ? Color.gray.opacity(0.3) : Color.clear)
+                )
+        )
         .contentShape(Rectangle())
-        // Improved hover handling with simplified logic
         .onHover { hovering in
-            // Don't update hover state during drag
-            if isDragging {
-                return
-            }
-            
-            // Cancel any pending timers
-            hoverTimer?.invalidate()
-            
-            if hovering {
-                // Animate hover state
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isIconHovered = true
-                }
-                
-                // Handle window preview if applicable
-                if app.isRunning && app.windowCount > 0 {
-                    AppLogger.shared.info("Scheduling preview for \(app.name)")
-                    hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: false) { _ in
-                        if !isDragging && isIconHovered {
-                            AppLogger.shared.info("Showing preview for \(app.name)")
-                            showPreview = true
-                        }
-                    }
-                }
-            } else {
-                // Mouse exited
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isIconHovered = false
-                }
-                
-                // Hide window preview with slight delay
-                if showPreview {
-                    hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
-                        showPreview = false
-                    }
-                }
-            }
+            isHovering = hovering
         }
         .onTapGesture {
             handleTap()
@@ -118,50 +75,9 @@ struct WindowsTaskbarIcon: View {
                 }
             }
         )
-        .gesture(
-            DragGesture(minimumDistance: 5, coordinateSpace: .global)
-                .onChanged { value in
-                    if !isDragging {
-                        isDragging = true
-                        showPreview = false
-                        hoverTimer?.invalidate()
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            isIconHovered = false
-                        }
-                    }
-                    dragOffset = value.translation
-                }
-                .onEnded { value in
-                    // Save the current value before resetting
-                    let finalLocation = value.location
-                    dragOffset = .zero
-                    
-                    // Wait briefly for animation to complete, then notify about drop
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        handleDrop(at: finalLocation)
-                        
-                        // Reset dragging state after drop is fully handled
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            isDragging = false
-                        }
-                    }
-                }
-        )
-        .popover(isPresented: $showPreview, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
-            WindowPreviewView(app: app, appManager: appManager)
-                .frame(width: 280)
-                .onAppear {
-                    AppLogger.shared.info("Showing preview for \(app.name)")
-                }
-                .onDisappear {
-                    AppLogger.shared.info("Preview dismissed for \(app.name)")
-                }
-        }
         .help(toolTip)
     }
     
-    // No indicators needed - removed blue line as requested
-
     private var toolTip: String {
         var tooltip = app.name
         if app.isRunning {
@@ -179,28 +95,6 @@ struct WindowsTaskbarIcon: View {
         return tooltip
     }
     
-    private func handleDrop(at location: CGPoint) {
-        AppLogger.shared.info("WindowsTaskbarIcon handleDrop at \(location)")
-        
-        // Forcefully post notification to all windows, letting them decide if they should handle it
-        let windowLocation = location
-        
-        // Print all windows for debugging
-        AppLogger.shared.info("All windows: \(NSApp.windows.map { $0.className })")
-        
-        // Notify the dock view about the drop
-        NotificationCenter.default.post(
-            name: NSNotification.Name("DockIconDropped"),
-            object: nil,
-            userInfo: [
-                "app": app,
-                "location": NSValue(point: windowLocation)
-            ]
-        )
-        
-        // Force an update to the app manager to reflect any changes
-        appManager.updateDockAppsIfNeeded()
-    }
     
     private func handleTap() {
         AppLogger.shared.info("WindowsTaskbarIcon handleTap for \(app.name)")

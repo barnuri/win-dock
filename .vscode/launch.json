@@ -1,0 +1,61 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Release - Patch",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/release.py",
+            "args": [
+                "patch"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Release - Minor",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/release.py",
+            "args": [
+                "minor"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Release - Major",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/release.py",
+            "args": [
+                "major"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Release - Dry Run",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/release.py",
+            "args": [
+                "--dry-run"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        }
+    ]
+}

@@ -1,0 +1,572 @@
+#!/usr/bin/env python3
+"""
+Release script for WinDock - Python version of the GitHub Actions workflow.
+This script handles the entire release process:
+1. Version bumping (major, minor, patch)
+2. Building the app
+3. Creating DMG
+4. Creating git tag
+5. Generating release notes
+6. Creating GitHub release (if GitHub CLI is installed)
+
+Usage:
+    python release.py [major|minor|patch]
+
+Optional Dependencies:
+    For enhanced functionality, you can install these optional packages:
+    - GitPython: `pip install gitpython`
+    - PyGithub: `pip install PyGithub` (for future GitHub API integration)
+"""
+
+import argparse
+import importlib.util
+import os
+import plistlib
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+# Check for optional dependencies
+HAVE_GITPYTHON = importlib.util.find_spec("git") is not None
+
+
+class ReleaseManager:
+    def __init__(self):
+        self.root_dir = Path(__file__).resolve().parent
+        self.info_plist_path = self.root_dir / "WinDock" / "Info.plist"
+        self.build_dir = self.root_dir / "build"
+        self.release_dir = self.build_dir / "Build" / "Products" / "Release"
+        self.app_path = self.release_dir / "WinDock.app"
+        self.current_version = None
+        self.new_version = None
+        self.dry_run = False
+
+    def run(self, version_type="patch"):
+        """Main execution flow for the release process."""
+        print(f"🚀 Starting WinDock release process ({version_type})...")
+
+        self.get_current_version()
+        self.calculate_new_version(version_type)
+        self.update_version_in_plist()
+        self.build_app()
+        self.create_dmg()
+
+        # Git operations
+        self.commit_version_bump()
+        self.create_tag()
+        self.generate_release_notes()
+        self.create_github_release()
+
+        self.cleanup()
+        print(f"✅ Release process completed successfully! Version {self.new_version} released.")
+
+    def get_current_version(self):
+        """Get the current version from Info.plist."""
+        try:
+            # Read Info.plist using Python's plistlib instead of plutil
+            with open(self.info_plist_path, "rb") as f:
+                plist_data = plistlib.load(f)
+
+            if "CFBundleShortVersionString" in plist_data:
+                self.current_version = plist_data["CFBundleShortVersionString"]
+                print(f"📊 Current version: {self.current_version}")
+            else:
+                self.current_version = "1.0.0"
+                print(f"📊 No existing version found, defaulting to: {self.current_version}")
+        except Exception as e:
+            sys.exit(f"❌ Error reading Info.plist: {e}")
+
+    def calculate_new_version(self, version_type):
+        """Calculate the new version based on the bump type."""
+        try:
+            # Split version into components
+            parts = self.current_version.split(".")
+            major = int(parts[0])
+            minor = int(parts[1]) if len(parts) > 1 else 0
+            patch = int(parts[2]) if len(parts) > 2 else 0
+
+            # Bump version according to semantic versioning
+            if version_type == "major":
+                major += 1
+                minor = 0
+                patch = 0
+            elif version_type == "minor":
+                minor += 1
+                patch = 0
+            elif version_type == "patch":
+                patch += 1
+
+            self.new_version = f"{major}.{minor}.{patch}"
+            print(f"📈 New version: {self.new_version}")
+        except Exception as e:
+            sys.exit(f"❌ Error calculating new version: {e}")
+
+    def update_version_in_plist(self):
+        """Update the version in Info.plist."""
+        if self.dry_run:
+            print(f"🔍 [DRY RUN] Would update Info.plist with version {self.new_version}")
+            return
+
+        try:
+            # Read the current plist data
+            with open(self.info_plist_path, "rb") as f:
+                plist_data = plistlib.load(f)
+
+            # Update versions
+            plist_data["CFBundleShortVersionString"] = self.new_version
+            plist_data["CFBundleVersion"] = self.new_version
+
+            # Write the updated plist back to file
+            with open(self.info_plist_path, "wb") as f:
+                plistlib.dump(plist_data, f)
+
+            print(f"📝 Updated Info.plist with version {self.new_version}")
+        except Exception as e:
+            sys.exit(f"❌ Error updating Info.plist: {e}")
+
+    def build_app(self):
+        """Build the application using the build.sh script."""
+        print("🔨 Building WinDock...")
+
+        # We still need to run the build script as it contains Xcode build commands
+        try:
+            build_script = self.root_dir / "build.sh"
+            # Ensure script is executable
+            os.chmod(build_script, 0o755)
+
+            # Run the build script
+            subprocess.run([str(build_script)], check=True)
+
+            # Verify the build was successful
+            if not self.app_path.exists():
+                sys.exit(f"❌ Build failed - WinDock.app not found at {self.app_path}")
+
+            print("✅ Build successful")
+
+            # List files in the Release directory using Python instead of ls
+            print(f"Contents of {self.release_dir}:")
+            for item in self.release_dir.iterdir():
+                item_stats = item.stat()
+                size = item_stats.st_size
+                mod_time = datetime.fromtimestamp(item_stats.st_mtime).strftime("%b %d %H:%M")
+                is_dir = "d" if item.is_dir() else "-"
+                print(f"{is_dir} {size:10} {mod_time} {item.name}")
+
+        except subprocess.CalledProcessError as e:
+            sys.exit(f"❌ Build failed: {e}")
+        except Exception as e:
+            sys.exit(f"❌ Error during build process: {e}")
+
+    def create_dmg(self):
+        """Create a DMG file for distribution."""
+        print("📦 Creating DMG archive...")
+        dmg_name = "WinDock.dmg"
+        dmg_path = self.root_dir / dmg_name
+
+        if self.dry_run:
+            print(f"🔍 [DRY RUN] Would create DMG: {dmg_name}")
+            return
+
+        try:
+            # Create temporary directory for DMG creation
+            with tempfile.TemporaryDirectory() as temp_dir:
+                dmg_temp = Path(temp_dir)
+
+                # Copy the app to the temporary directory
+                app_copy_dest = dmg_temp / "WinDock.app"
+                shutil.copytree(self.app_path, app_copy_dest)
+
+                # Create symbolic link to Applications
+                applications_link = dmg_temp / "Applications"
+                os.symlink("/Applications", applications_link)
+
+                # We still need hdiutil for creating DMG as it's macOS specific
+                # and there's no direct Python equivalent
+                volume_name = f"WinDock {self.new_version}"
+                subprocess.run(
+                    [
+                        "hdiutil",
+                        "create",
+                        "-volname",
+                        volume_name,
+                        "-srcfolder",
+                        str(dmg_temp),
+                        "-ov",
+                        "-format",
+                        "UDZO",
+                        "-imagekey",
+                        "zlib-level=9",
+                        str(dmg_path),
+                    ],
+                    check=True,
+                )
+
+            print(f"✅ Created DMG: {dmg_name}")
+
+            # Show file info using Python instead of ls
+            if dmg_path.exists():
+                size_bytes = dmg_path.stat().st_size
+                size_mb = size_bytes / (1024 * 1024)
+                mod_time = datetime.fromtimestamp(dmg_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                print(f"File: {dmg_path.name}")
+                print(f"Size: {size_mb:.2f} MB ({size_bytes:,} bytes)")
+                print(f"Modified: {mod_time}")
+
+        except subprocess.CalledProcessError as e:
+            sys.exit(f"❌ Error creating DMG: {e}")
+        except Exception as e:
+            sys.exit(f"❌ Error during DMG creation: {e}")
+
+    def commit_version_bump(self):
+        """Commit the version bump to git."""
+        print("📝 Committing version bump...")
+
+        if self.dry_run:
+            print(f"🔍 [DRY RUN] Would commit and push version bump to {self.new_version}")
+            return
+
+        # Check if we have GitPython available for a more Pythonic approach
+        if HAVE_GITPYTHON:
+            try:
+                import git
+
+                repo = git.Repo(self.root_dir)
+
+                # Stage the file
+                repo.git.add(str(self.info_plist_path))
+
+                # Commit changes
+                repo.index.commit(f"Bump version to {self.new_version}")
+
+                # Push changes
+                origin = repo.remote("origin")
+                push_info = origin.push()
+
+                if not push_info[0].flags & git.PushInfo.ERROR:
+                    print("✅ Changes committed and pushed successfully")
+                else:
+                    print("⚠️ Warning: Could not push version bump commit")
+                    print("You may need to push manually with 'git push'")
+            except Exception as e:
+                print(f"⚠️ Warning: Git operations with GitPython failed: {e}")
+                print("Falling back to subprocess for git operations")
+                self._git_commit_via_subprocess()
+        else:
+            # Use subprocess approach if GitPython is not available
+            self._git_commit_via_subprocess()
+
+    def _git_commit_via_subprocess(self):
+        """Helper method to commit using subprocess."""
+        try:
+            # Add and commit changes
+            subprocess.run(["git", "add", str(self.info_plist_path)], check=True)
+            subprocess.run(["git", "commit", "-m", f"Bump version to {self.new_version}"], check=True)
+
+            # Push changes
+            push_result = subprocess.run(["git", "push"], capture_output=True, text=True)
+            if push_result.returncode != 0:
+                print(f"⚠️ Warning: Could not push version bump commit: {push_result.stderr}")
+                print("You may need to push manually with 'git push'")
+            else:
+                print("✅ Changes committed and pushed successfully")
+        except subprocess.CalledProcessError as e:
+            print(f"⚠️ Warning: Git operations failed: {e}")
+            print("Continuing with release process, but you may need to commit and push manually.")
+
+    def create_tag(self):
+        """Create and push a Git tag for the release."""
+        self.tag_name = f"v{self.new_version}"
+        print(f"🏷️ Creating release tag: {self.tag_name}")
+
+        if self.dry_run:
+            print(f"🔍 [DRY RUN] Would create and push tag {self.tag_name}")
+            return
+
+        # Check if we have GitPython available for a more Pythonic approach
+        if HAVE_GITPYTHON:
+            try:
+                import git
+
+                repo = git.Repo(self.root_dir)
+
+                # Create tag
+                repo.create_tag(self.tag_name, message=f"Version {self.new_version}")
+
+                # Push tag
+                origin = repo.remote("origin")
+                push_info = origin.push(self.tag_name)
+
+                if not push_info[0].flags & git.PushInfo.ERROR:
+                    print(f"✅ Tag {self.tag_name} created and pushed successfully")
+                else:
+                    print(f"⚠️ Warning: Could not push tag {self.tag_name}")
+                    print(f"You may need to push the tag manually with 'git push origin {self.tag_name}'")
+            except Exception as e:
+                print(f"⚠️ Warning: Git tag operations with GitPython failed: {e}")
+                print("Falling back to subprocess for git tag operations")
+                self._git_tag_via_subprocess()
+        else:
+            # Use subprocess approach if GitPython is not available
+            self._git_tag_via_subprocess()
+
+    def _git_tag_via_subprocess(self):
+        """Helper method to create and push tag using subprocess."""
+        try:
+            # Create and push tag
+            subprocess.run(["git", "tag", self.tag_name], check=True)
+            push_result = subprocess.run(["git", "push", "origin", self.tag_name], capture_output=True, text=True)
+
+            if push_result.returncode != 0:
+                print(f"⚠️ Warning: Could not push tag: {push_result.stderr}")
+                print(f"You may need to push the tag manually with 'git push origin {self.tag_name}'")
+            else:
+                print(f"✅ Tag {self.tag_name} created and pushed successfully")
+        except subprocess.CalledProcessError as e:
+            print(f"⚠️ Warning: Creating tag failed: {e}")
+            print("Continuing with release process, but you may need to create and push the tag manually.")
+
+    def generate_release_notes(self):
+        """Generate release notes based on git commits."""
+        print("📝 Generating release notes...")
+        try:
+            # Check if we have GitPython available
+            if HAVE_GITPYTHON:
+                # Import GitPython here to avoid errors if it's not installed
+                import git
+
+                # Initialize repository
+                repo = git.Repo(self.root_dir)
+
+                # Try to get the previous tag
+                last_tag = None
+                for tag in repo.tags:
+                    last_tag = tag.name
+                    break  # Get the most recent tag
+
+                # Get commits since last tag or all commits if no tag
+                if last_tag:
+                    commits_text = []
+                    for commit in repo.iter_commits(f"{last_tag}..HEAD^"):
+                        commits_text.append(f"- {commit.summary}")
+                    commits = "\n".join(commits_text)
+                else:
+                    commits_text = []
+                    for commit in repo.iter_commits():
+                        commits_text.append(f"- {commit.summary}")
+                    commits = "\n".join(commits_text)
+            else:
+                # Fallback to subprocess if GitPython is not available
+                get_last_tag = subprocess.run(
+                    ["git", "describe", "--tags", "--abbrev=0", "HEAD^"], capture_output=True, text=True
+                )
+
+                # Get commits since last tag or all commits if no tag
+                if get_last_tag.returncode == 0:
+                    last_tag = get_last_tag.stdout.strip()
+                    commits_cmd = ["git", "log", "--oneline", "--pretty=format:- %s", f"{last_tag}..HEAD^"]
+                else:
+                    commits_cmd = ["git", "log", "--oneline", "--pretty=format:- %s", "HEAD"]
+
+                commits = subprocess.run(commits_cmd, capture_output=True, text=True, check=True).stdout
+
+            # Create release notes content
+            self.release_notes = f"""## What's Changed
+
+{commits}
+
+## Installation
+
+1. Download `WinDock.dmg`
+2. Open the DMG file
+3. Drag `WinDock.app` to the Applications folder
+4. Run the app from Applications
+"""
+
+            # Save to file
+            release_notes_path = self.root_dir / "release_notes.md"
+            with open(release_notes_path, "w") as f:
+                f.write(self.release_notes)
+
+            print("✅ Generated release notes")
+        except subprocess.CalledProcessError as e:
+            print(f"⚠️ Warning: Error generating release notes: {e}")
+            self.release_notes = f"## WinDock {self.new_version}\n\nReleased on {datetime.now().strftime('%Y-%m-%d')}"
+            print("Using basic release notes instead.")
+
+    def create_github_release(self):
+        """Create a GitHub release using the GitHub CLI if available."""
+        print("🌐 Creating GitHub release...")
+
+        if self.dry_run:
+            print(f"🔍 [DRY RUN] Would create GitHub release for tag {self.tag_name}")
+            return
+
+        # Try to check if PyGithub is available as an alternative to gh CLI
+        try:
+            import importlib.util
+
+            pygithub_spec = importlib.util.find_spec("github")
+            has_pygithub = pygithub_spec is not None
+        except Exception:
+            has_pygithub = False
+
+        # Check if GitHub CLI is installed (preferred method)
+        has_gh_cli = False
+        try:
+            subprocess.run(["gh", "--version"], capture_output=True, check=True)
+            has_gh_cli = True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            has_gh_cli = False
+
+        if not (has_gh_cli or has_pygithub):
+            print("⚠️ Neither GitHub CLI (gh) nor PyGithub found. Skipping GitHub release creation.")
+            print("To create the release manually, go to the repository's releases page")
+            print(f"and create a new release with tag '{self.tag_name}'.")
+            return
+
+        # Create a ZIP archive of the app bundle
+        app_zip_file = self.root_dir / "WinDock.zip"
+        if self.app_path.exists():
+            print("📦 Creating ZIP archive of WinDock.app...")
+            try:
+                # Use shutil.make_archive to create a proper zip archive
+                shutil.make_archive(
+                    str(app_zip_file)[:-4],  # Path without .zip extension
+                    "zip",  # Archive format
+                    self.release_dir,  # Root directory to archive
+                    "WinDock.app",  # Base directory to include
+                )
+                print(f"✅ Created ZIP archive: {app_zip_file}")
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to create ZIP archive: {e}")
+        else:
+            print(f"⚠️ Warning: App bundle not found at {self.app_path}")
+
+        # Check if the DMG file exists
+        dmg_file = self.root_dir / "WinDock.dmg"
+        if not dmg_file.exists():
+            print(f"⚠️ Warning: DMG file not found at {dmg_file}")
+
+        # Prepare release parameters
+        release_name = f"WinDock {self.new_version}"
+        body_path = self.root_dir / "release_notes.md"
+
+        # We'll use GitHub CLI for now since PyGithub would require authentication setup
+        # which is beyond the scope of this conversion
+        if has_gh_cli:
+            try:
+                # Check if release already exists
+                check_release = subprocess.run(["gh", "release", "view", self.tag_name], capture_output=True)
+
+                if check_release.returncode == 0:
+                    # Update existing release
+                    print(f"🔄 Release {self.tag_name} already exists, updating...")
+                    subprocess.run(
+                        [
+                            "gh",
+                            "release",
+                            "edit",
+                            self.tag_name,
+                            "--title",
+                            release_name,
+                            "--notes-file",
+                            str(body_path),
+                        ],
+                        check=True,
+                    )
+                else:
+                    # Create new release
+                    print(f"🆕 Creating new release {self.tag_name}...")
+                    create_cmd = [
+                        "gh",
+                        "release",
+                        "create",
+                        self.tag_name,
+                        "--title",
+                        release_name,
+                        "--notes-file",
+                        str(body_path),
+                    ]
+
+                    # Add assets if they exist
+                    if dmg_file.exists():
+                        create_cmd.append(str(dmg_file))
+                    if app_zip_file.exists():
+                        create_cmd.append(str(app_zip_file))
+
+                    subprocess.run(create_cmd, check=True)
+
+                # Upload assets if not already present
+                if dmg_file.exists():
+                    print(f"📤 Uploading {dmg_file.name} to release {self.tag_name}...")
+                    subprocess.run([
+                        "gh",
+                        "release",
+                        "upload",
+                        self.tag_name,
+                        str(dmg_file),
+                        "--clobber",  # Overwrite if already exists
+                    ])
+
+                # Upload ZIP file if not already included
+                if app_zip_file.exists():
+                    print(f"📤 Uploading {app_zip_file.name} to release {self.tag_name}...")
+                    subprocess.run([
+                        "gh",
+                        "release",
+                        "upload",
+                        self.tag_name,
+                        str(app_zip_file),
+                        "--clobber",  # Overwrite if already exists
+                    ])
+
+                print("✅ GitHub release created/updated successfully")
+            except subprocess.CalledProcessError as e:
+                print(f"⚠️ Warning: GitHub release creation failed: {e}")
+                print("You may need to create the release manually through the GitHub web interface.")
+        # Note: we could implement PyGithub approach here as an alternative
+
+    def cleanup(self):
+        """Clean up temporary files created during the release process."""
+        print("🧹 Cleaning up...")
+        # Only clean up the release notes file
+        # We keep the DMG and ZIP files for reference
+        files_to_remove = [self.root_dir / "release_notes.md"]
+
+        for file_path in files_to_remove:
+            if file_path.exists():
+                if file_path.is_dir():
+                    shutil.rmtree(file_path)
+                else:
+                    file_path.unlink()
+
+        print("✅ Cleanup completed")
+
+
+def main():
+    """Main entry point for the script."""
+    parser = argparse.ArgumentParser(description="WinDock release script")
+    parser.add_argument(
+        "version_type",
+        nargs="?",
+        default="patch",
+        choices=["major", "minor", "patch"],
+        help="Version bump type (default: patch)",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Perform a dry run without making any changes")
+    args = parser.parse_args()
+
+    if args.dry_run:
+        print("🔍 DRY RUN MODE: No changes will be committed or pushed")
+
+    release_manager = ReleaseManager()
+    # Set dry run mode attribute if we implement it
+    release_manager.dry_run = args.dry_run if hasattr(args, "dry_run") else False
+    release_manager.run(args.version_type)
+
+
+if __name__ == "__main__":
+    main()
