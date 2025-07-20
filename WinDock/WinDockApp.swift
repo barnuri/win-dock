@@ -2,6 +2,15 @@ import SwiftUI
 import AppKit
 import Foundation
 import Darwin
+import ObjectiveC
+
+// Import for ProcessSerialNumber and TransformProcessType
+#if os(macOS)
+import ApplicationServices
+#endif
+
+// Key for associated objects
+private var windowDelegateKey: UInt8 = 0
 
 private func setGlobalErrorHandlers() {
     NSSetUncaughtExceptionHandler { exception in
@@ -20,14 +29,16 @@ struct WinDockApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     var body: some Scene {
-        WindowGroup("ReservedPlace") {
+        WindowGroup("WinDock") {
+            // Main content view with minimal size to ensure app is visible in dock
             ReservedPlace()
-                .frame(width: 0, height: 0)
-                .opacity(0)
+                .frame(width: 1, height: 1)
+                .opacity(0.01) // Very slight opacity to keep window registered
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         
+        // Settings scene - this integrates with standard Command+, shortcut
         Settings {
             SettingsView()
         }
@@ -37,9 +48,6 @@ struct WinDockApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     var dockWindows: [DockWindow] = []
     var statusBarItem: NSStatusItem?
-    var settingsWindowObserver: NSObjectProtocol?
-    var settingsWindow: NSWindow?
-    var settingsWindowDelegate: SettingsWindowDelegate?
     @AppStorage("dockPosition") var dockPosition: DockPosition = .bottom
     private var isUpdatingDockWindows = false
     private var lastDockPosition: DockPosition = .bottom
@@ -48,6 +56,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastPaddingBottom: Double = 0.0
     private var lastPaddingLeft: Double = 0.0
     private var lastPaddingRight: Double = 0.0
+    
+    // Variable to keep a reference to the settings window
+    private var settingsWindow: NSWindow?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         setGlobalErrorHandlers()
@@ -60,42 +71,303 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         lastPaddingLeft = UserDefaults.standard.double(forKey: "paddingLeft")
         lastPaddingRight = UserDefaults.standard.double(forKey: "paddingRight")
         
+        // Ensure the app shows up in the dock (counteract LSUIElement if needed)
+        ensureAppVisibility()
+        
+        // Ensure we have a proper application menu
+        setupApplicationMenu()
+        
+        // Setup the rest of the app
         setupStatusBarItem()
         setupDockWindowsForAllScreens()
+        
+        // Ensure app is properly activated
+        NSApp.activate(ignoringOtherApps: true)
+        
+        // Register for notifications
         NotificationCenter.default.addObserver(self, selector: #selector(screenParametersDidChange), name: NSApplication.didChangeScreenParametersNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(userDefaultsDidChange), name: UserDefaults.didChangeNotification, object: nil)
+        
+        // Log that we've started
+        AppLogger.shared.info("Application finished launching - dock position: \(dockPosition.rawValue)")
+    }
+    
+    private func ensureAppVisibility() {
+        // This ensures app is visible in dock and shows menu bar
+        
+        // Set activation policy to regular to ensure app appears in dock
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+            AppLogger.shared.info("Set application activation policy to regular")
+        }
+        
+        // Activate the app
+        NSApp.activate(ignoringOtherApps: true)
+        
+        // Log the process state change
+        AppLogger.shared.info("Ensured app visibility in dock")
     }
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
     }
     
+    func applicationWillTerminate(_ notification: Notification) {
+        AppLogger.shared.info("Application will terminate")
+        
+        // Save window positions when app quits
+        if let settingsWindow = settingsWindow {
+            saveSettingsWindowFrame(settingsWindow)
+        }
+    }
+    
+    private func setupApplicationMenu() {
+        // Create the main menu for the application
+        let mainMenu = NSMenu()
+        
+        // Application menu (first menu)
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu()
+        
+        // About item
+        let aboutItem = NSMenuItem(title: "About Win Dock", action: #selector(openAboutWindow), keyEquivalent: "")
+        aboutItem.target = self
+        appMenu.addItem(aboutItem)
+        
+        // Separator
+        appMenu.addItem(NSMenuItem.separator())
+        
+        // Settings item with the standard Command+Comma shortcut
+        let prefsItem = NSMenuItem(title: "Settings...", action: #selector(openSettingsMenu), keyEquivalent: ",")
+        prefsItem.target = self
+        appMenu.addItem(prefsItem)
+        
+        // Separator
+        appMenu.addItem(NSMenuItem.separator())
+        
+        // Services submenu
+        let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+        let servicesMenu = NSMenu()
+        servicesItem.submenu = servicesMenu
+        appMenu.addItem(servicesItem)
+        
+        // Register the services menu
+        NSApp.servicesMenu = servicesMenu
+        
+        // Separator
+        appMenu.addItem(NSMenuItem.separator())
+        
+        // Standard application items
+        let hideItem = NSMenuItem(title: "Hide Win Dock", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        hideItem.target = NSApp
+        appMenu.addItem(hideItem)
+        
+        let hideOthersItem = NSMenuItem(title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthersItem.keyEquivalentModifierMask = [.command, .option]
+        hideOthersItem.target = NSApp
+        appMenu.addItem(hideOthersItem)
+        
+        let showAllItem = NSMenuItem(title: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        showAllItem.target = NSApp
+        appMenu.addItem(showAllItem)
+        
+        // Separator
+        appMenu.addItem(NSMenuItem.separator())
+        
+        // Quit item
+        let quitItem = NSMenuItem(title: "Quit Win Dock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quitItem.target = NSApp
+        appMenu.addItem(quitItem)
+        
+        // Add app menu to main menu
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+        
+        // Edit menu
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        
+        // Standard edit menu items
+        editMenu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+        editMenu.addItem(NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z"))
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+        
+        // View menu
+        let viewMenuItem = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+        
+        // Add dock position submenu
+        let positionMenu = NSMenu()
+        for pos in DockPosition.allCases {
+            let item = NSMenuItem(title: pos.rawValue.capitalized, action: #selector(changeDockPosition(_:)), keyEquivalent: "")
+            item.target = self
+            item.state = (pos == dockPosition) ? .on : .off
+            item.representedObject = pos.rawValue
+            positionMenu.addItem(item)
+        }
+        let positionItem = NSMenuItem(title: "Dock Position", action: nil, keyEquivalent: "")
+        positionItem.submenu = positionMenu
+        viewMenu.addItem(positionItem)
+        
+        viewMenuItem.submenu = viewMenu
+        mainMenu.addItem(viewMenuItem)
+        
+        // Window menu
+        let windowMenuItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        
+        windowMenu.addItem(NSMenuItem(title: "Minimize", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m"))
+        windowMenu.addItem(NSMenuItem(title: "Zoom", action: #selector(NSWindow.zoom(_:)), keyEquivalent: ""))
+        
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+        
+        // Register window menu
+        NSApp.windowsMenu = windowMenu
+        
+        // Help menu
+        let helpMenuItem = NSMenuItem()
+        let helpMenu = NSMenu(title: "Help")
+        
+        helpMenu.addItem(NSMenuItem(title: "Win Dock Help", action: #selector(NSApplication.showHelp(_:)), keyEquivalent: "?"))
+        
+        helpMenuItem.submenu = helpMenu
+        mainMenu.addItem(helpMenuItem)
+        
+        // Set the menu
+        NSApp.mainMenu = mainMenu
+        
+        AppLogger.shared.info("Application menu set up successfully")
+    }
+    
    
     private func setupStatusBarItem() {
         statusBarItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
-        if let statusButton = statusBarItem?.button {
-            statusButton.image = NSImage(systemSymbolName: "dock.rectangle", accessibilityDescription: "Win Dock")
+        // Try to create status button
+        guard let statusButton = statusBarItem?.button else {
+            AppLogger.shared.error("Could not create status bar button")
+            return
+        }
+
+        // Multi-layered approach to load icon with logging
+        do {
+            var iconImage: NSImage?
+            var iconSource = ""
+            
+            // Try multiple methods to load icon with fallbacks
+            // Method 1: Asset catalog
+            if let assetIcon = NSImage(named: "AppIcon") {
+                iconImage = assetIcon
+                iconSource = "asset catalog (AppIcon)"
+            }
+            // Method 2: Bundle resources
+            else if let iconPath = Bundle.main.path(forResource: "icon", ofType: "png"),
+                     let fileIcon = NSImage(contentsOfFile: iconPath) {
+                iconImage = fileIcon
+                iconSource = "bundle path: \(iconPath)"
+            }
+            // Method 3: App icon from bundle or system symbol fallback
+            else {
+                // First try bundle icon
+                iconImage = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
+                iconSource = "app bundle icon"
+                
+                // If we still don't have a valid icon, try system symbol
+                if iconImage == nil, let symbolIcon = NSImage(systemSymbolName: "dock.rectangle", accessibilityDescription: "Win Dock") {
+                    iconImage = symbolIcon
+                    iconSource = "system symbol fallback"
+                    AppLogger.shared.warning("Failed to load custom icon, using fallback system symbol")
+                }
+                
+                // If all methods failed, throw an error
+                if iconImage == nil {
+                    throw NSError(domain: "WinDock", code: 100, userInfo: [NSLocalizedDescriptionKey: "All icon loading methods failed"])
+                }
+            }
+            
+            // Resize icon to fit nicely in the status bar (18x18 is good for menu bar)
+            guard let icon = iconImage else {
+                throw NSError(domain: "WinDock", code: 101, userInfo: [NSLocalizedDescriptionKey: "Icon image is nil after loading attempts"])
+            }
+            
+            let resizedIcon = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+                icon.draw(in: rect)
+                return true
+            }
+            
+            statusButton.image = resizedIcon
+            AppLogger.shared.info("Status bar icon successfully loaded from \(iconSource)")
+            
+            // Configure button
             statusButton.action = #selector(statusBarItemClicked)
             statusButton.target = self
+            
+        } catch {
+            AppLogger.shared.error("Failed to set status bar icon", error: error)
+            // Final fallback - text-only button
+            statusButton.title = "WD"
         }
 
         // Create menu for status bar item
         let menu = NSMenu()
-        // Add app name at the top, disabled
+        
+        // Add app name with icon at the top, disabled
         let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Win Dock"
         let appNameItem = NSMenuItem(title: appName, action: nil, keyEquivalent: "")
+        
+        // Add app icon to the menu item (try multiple sources)
+        // No need for do-catch since we're not throwing anything
+        var menuIcon: NSImage?
+        
+        if let customIcon = NSImage(named: "AppIcon") {
+            menuIcon = customIcon
+        } else if let iconPath = Bundle.main.path(forResource: "icon", ofType: "png"),
+                  let fileIcon = NSImage(contentsOfFile: iconPath) {
+            menuIcon = fileIcon
+        } else {
+            menuIcon = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
+        }
+        
+        if let icon = menuIcon {
+            // Resize icon to fit nicely in menu item (16x16 is standard)
+            let resizedIcon = NSImage(size: NSSize(width: 16, height: 16), flipped: false) { rect in
+                icon.draw(in: rect)
+                return true
+            }
+            appNameItem.image = resizedIcon
+        } else {
+            AppLogger.shared.error("Failed to set menu item icon - no valid icon found")
+        }
+        
         appNameItem.isEnabled = false
         menu.addItem(appNameItem)
         menu.addItem(NSMenuItem.separator())
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettingsMenu), keyEquivalent: "")
+        
+        // About menu item
+        let aboutItem = NSMenuItem(title: "About Win Dock", action: #selector(openAboutWindow), keyEquivalent: "")
+        aboutItem.target = self
+        menu.addItem(aboutItem)
+        
+        // Settings menu item
+        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettingsMenu), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
+        
+        // Show logs menu item
+        let logsItem = NSMenuItem(title: "Show Logs", action: #selector(showLogsFolder), keyEquivalent: "")
+        logsItem.target = self
+        menu.addItem(logsItem)
+        
         menu.addItem(NSMenuItem.separator())
-        let quitItem = NSMenuItem(title: "Quit Win Dock", action: #selector(quitApp), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
-
+        
         // Add dock position submenu
         let positionMenu = NSMenu()
         for pos in DockPosition.allCases {
@@ -108,6 +380,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let positionItem = NSMenuItem(title: "Dock Position", action: nil, keyEquivalent: "")
         menu.setSubmenu(positionMenu, for: positionItem)
         menu.addItem(positionItem)
+        
+        menu.addItem(NSMenuItem.separator())
+        
+        // Quit menu item
+        let quitItem = NSMenuItem(title: "Quit Win Dock", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
 
         statusBarItem?.menu = menu
     }
@@ -115,8 +394,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func statusBarItemClicked() {
         // Show dock window on all displays and bring to front
         for dockWindow in dockWindows {
-            dockWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-            dockWindow.level = .floating
+            dockWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .participatesInCycle]
+            dockWindow.level = .normal
             dockWindow.orderFrontRegardless()
             dockWindow.makeKeyAndOrderFront(nil)
         }
@@ -325,8 +604,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     // Static method that can be called from anywhere
     static func openSettingsWindow() {
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            appDelegate.showSettingsWindow()
+        DispatchQueue.main.async {
+            if let delegate = NSApp.delegate as? AppDelegate {
+                // Use the full implementation in the app delegate
+                delegate.openSettings()
+            } else {
+                // Fallback if delegate is not available
+                NSApp.activate(ignoringOtherApps: true)
+                let _ = NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) ||
+                       NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+                AppLogger.shared.info("Settings window opened via static method (delegate not available)")
+            }
         }
     }
     
@@ -335,67 +623,139 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openSettings() {
-        DispatchQueue.main.async {
-            self.showSettingsWindow()
-        }
-    }
-    
-    func showSettingsWindow() {
+        AppLogger.shared.info("Opening settings window")
         NSApp.activate(ignoringOtherApps: true)
-
-        // First, check if settings window is already open
-        if let existingWindow = settingsWindow, existingWindow.isVisible {
-            existingWindow.makeKeyAndOrderFront(nil)
-            existingWindow.orderFrontRegardless()
+        
+        // Try multiple approaches to ensure settings open
+        
+        // First try the standard mechanism for SwiftUI Settings scene
+        if NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
+            AppLogger.shared.info("Settings window opened via standard SwiftUI mechanism")
             return
         }
-
-        // Create settings window manually
-        createSettingsWindow()
+        
+        // If that fails, try showing preferences directly
+        if NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil) {
+            AppLogger.shared.info("Settings window opened via preferences window selector")
+            return
+        }
+        
+        // As a last resort, create and show settings window manually
+        let window = createSettingsWindowIfNeeded()
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        
+        AppLogger.shared.info("Settings window created and displayed using manual approach")
     }
     
-    private func createSettingsWindow() {
-        let settingsView = SettingsView()
-        let hostingController = NSHostingController(rootView: settingsView)
+    // Helper method to create and display the settings window
+    private func createSettingsWindowIfNeeded() -> NSWindow {
+        // If we already have a window, just use it
+        if let existingWindow = settingsWindow {
+            return existingWindow
+        }
         
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 700, height: 650),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+        // Create and configure settings window
+        let newSettingsWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 550),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         
-        window.title = "WinDock Settings"
-        window.contentViewController = hostingController
-        window.center()
-        window.setFrameAutosaveName("SettingsWindow")
+        // Set window properties
+        newSettingsWindow.title = "WinDock Settings"
+        newSettingsWindow.isReleasedWhenClosed = false
+        newSettingsWindow.minSize = NSSize(width: 600, height: 400)
         
-        // Set minimum and maximum window size with scroll support
-        window.minSize = NSSize(width: 600, height: 400)
-        window.maxSize = NSSize(width: 1200, height: 1000)
-        
-        // Enable full size content view to show tabs properly
-        window.titlebarAppearsTransparent = false
-        window.titleVisibility = .visible
-        
-        // Enable automatic content size adjustment
-        window.contentResizeIncrements = NSSize(width: 1, height: 1)
-        
-        // Prevent the app from terminating when this window closes
-        window.isReleasedWhenClosed = false
-        
-        window.makeKeyAndOrderFront(nil)
-        window.level = .normal
-        
-        // Store reference to the window
-        settingsWindow = window
-        
-        // Set up window delegate to clean up reference when closed
-        settingsWindowDelegate = SettingsWindowDelegate { [weak self] in
-            self?.settingsWindow = nil
-            self?.settingsWindowDelegate = nil
+        // Restore saved position or center the window
+        if let frameString = UserDefaults.standard.string(forKey: "SettingsWindowFrame") {
+            let frame = NSRectFromString(frameString)
+            // Validate frame to ensure it's visible on current screens
+            let validFrame = validateWindowFrame(frame)
+            newSettingsWindow.setFrame(validFrame, display: true)
+            AppLogger.shared.debug("Restored settings window frame: \(validFrame)")
+        } else {
+            newSettingsWindow.center()
         }
-        window.delegate = settingsWindowDelegate
+        
+        // Create the SwiftUI view
+        let settingsView = SettingsView()
+        let hostingController = NSHostingController(rootView: settingsView)
+        
+        // Set the view controller
+        newSettingsWindow.contentViewController = hostingController
+        
+        // Create a strong reference to the delegate and store it
+        let windowDelegate = SettingsWindowDelegate(appDelegate: self)
+        
+        // Set the window delegate to track position
+        newSettingsWindow.delegate = windowDelegate
+        
+        // Store references to prevent deallocation
+        settingsWindow = newSettingsWindow
+        
+        // Store the delegate in associated object to keep it alive
+        objc_setAssociatedObject(newSettingsWindow, &windowDelegateKey, windowDelegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        
+        return newSettingsWindow
+    }
+    
+    // Function to validate window frame to ensure it's visible on screen
+    private func validateWindowFrame(_ frame: NSRect) -> NSRect {
+        let minSize = NSSize(width: 600, height: 400)
+        var validFrame = frame
+        
+        // Ensure minimum size
+        if validFrame.size.width < minSize.width {
+            validFrame.size.width = minSize.width
+        }
+        if validFrame.size.height < minSize.height {
+            validFrame.size.height = minSize.height
+        }
+        
+        // Find the screen that contains at least some part of the window
+        let containingScreen = NSScreen.screens.first { screen in
+            screen.frame.intersects(validFrame)
+        } ?? NSScreen.main ?? NSScreen.screens.first
+        
+        guard let screen = containingScreen else {
+            // If no screens are found, return the original frame
+            return validFrame
+        }
+        
+        // Make sure the window is visible on screen
+        if validFrame.maxX < screen.frame.minX + 100 {
+            validFrame.origin.x = screen.frame.minX + 50
+        }
+        if validFrame.minX > screen.frame.maxX - 100 {
+            validFrame.origin.x = screen.frame.maxX - validFrame.width - 50
+        }
+        if validFrame.maxY < screen.frame.minY + 100 {
+            validFrame.origin.y = screen.frame.minY + 50
+        }
+        if validFrame.minY > screen.frame.maxY - 100 {
+            validFrame.origin.y = screen.frame.maxY - validFrame.height - 50
+        }
+        
+        return validFrame
+    }
+    
+    // Save window position and size
+    func saveSettingsWindowFrame(_ window: NSWindow) {
+        let frame = window.frame
+        UserDefaults.standard.set(NSStringFromRect(frame), forKey: "SettingsWindowFrame")
+        AppLogger.shared.debug("Saved settings window frame: \(frame)")
+    }
+    
+    @objc func openAboutWindow() {
+        AppLogger.shared.info("Opening about window")
+        AboutWindow.showAboutWindow()
+    }
+    
+    @objc func showLogsFolder() {
+        AppLogger.shared.info("Opening logs folder")
+        AppLogger.shared.showLogsInFinder()
     }
     
     @objc private func quitApp() {
@@ -403,8 +763,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     deinit {
-        if let observer = settingsWindowObserver {
-            NotificationCenter.default.removeObserver(observer)
+        NotificationCenter.default.removeObserver(self)
+    }
+}
+
+// Window delegate to capture window position changes
+class SettingsWindowDelegate: NSObject, NSWindowDelegate {
+    weak var appDelegate: AppDelegate?
+    
+    init(appDelegate: AppDelegate) {
+        self.appDelegate = appDelegate
+        super.init()
+    }
+    
+    func windowDidResize(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            appDelegate?.saveSettingsWindowFrame(window)
+        }
+    }
+    
+    func windowDidMove(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            appDelegate?.saveSettingsWindowFrame(window)
         }
     }
 }
@@ -422,21 +802,3 @@ enum DockPosition: String, CaseIterable {
     }
 }
 
-// Helper class to handle settings window delegate
-class SettingsWindowDelegate: NSObject, NSWindowDelegate {
-    private let onClose: () -> Void
-    
-    init(onClose: @escaping () -> Void) {
-        self.onClose = onClose
-        super.init()
-    }
-    
-    func windowWillClose(_ notification: Notification) {
-        onClose()
-    }
-    
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        // Always allow the window to close, but don't terminate the app
-        return true
-    }
-}

@@ -40,13 +40,21 @@ class DockWindow: NSPanel {
     
     private func setup() {
         if isPreview { return }
-        level = .floating
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        level = .normal // Use normal level to appear in Alt+Tab
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .participatesInCycle]
         backgroundColor = .clear
         isOpaque = false
         hasShadow = false
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
+        
+        // Enhanced accessibility and app switcher support
+        self.setAccessibilityTitle("WinDock Taskbar")
+        self.setAccessibilityRole(.application)
+        self.setAccessibilitySubrole(.standardWindow)
+        
+        // Set a proper window title for app switcher
+        self.title = "WinDock Taskbar"
 
         updatePosition()
         registerScreenReservedArea()

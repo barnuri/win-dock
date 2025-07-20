@@ -2,7 +2,7 @@
 
 set -e
 
-bash build.sh
+./build.sh
 
 # Close any existing WinDock instances
 pkill -f "WinDock.app" 2>/dev/null || true

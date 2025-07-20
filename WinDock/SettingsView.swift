@@ -503,15 +503,24 @@ struct AboutView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-            Image(systemName: "dock.rectangle")
-                .font(.system(size: 72))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [.blue, .purple],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+            // Use the app icon instead of system symbol
+            if let customIcon = NSImage(named: "AppIcon") ?? NSImage(contentsOfFile: Bundle.main.path(forResource: "icon", ofType: "png") ?? "") {
+                Image(nsImage: customIcon)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 128, height: 128)
+            } else {
+                // Fallback to system symbol if icon not found
+                Image(systemName: "dock.rectangle")
+                    .font(.system(size: 72))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.blue, .purple],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
                     )
-                )
+            }
             
             Text("Win Dock")
                 .font(.largeTitle)
