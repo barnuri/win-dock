@@ -566,6 +566,8 @@ def main():
     # Set dry run mode attribute if we implement it
     release_manager.dry_run = args.dry_run if hasattr(args, "dry_run") else False
     release_manager.run(args.version_type)
+    print("🚀 Release script completed successfully!")
+    print(f"https://github.com/barnuri/win-dock/releases/tag/{release_manager.tag_name}")
 
 
 if __name__ == "__main__":

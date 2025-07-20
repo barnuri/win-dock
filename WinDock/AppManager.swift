@@ -317,6 +317,8 @@ class AppManager: ObservableObject {
         let app = dockApps.remove(at: sourceIndex)
         let insertIndex = sourceIndex < destinationIndex ? destinationIndex - 1 : destinationIndex
         dockApps.insert(app, at: insertIndex)
+        NotificationCenter.default.post(name: NSNotification.Name("DockAppOrderChanged"), object: nil)
+        AppLogger.shared.info("Moved app from index \(sourceIndex) to \(destinationIndex)")
         
         saveDockAppOrder()
     }

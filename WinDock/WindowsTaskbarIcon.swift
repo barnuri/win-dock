@@ -8,6 +8,7 @@ struct WindowsTaskbarIcon: View {
 
     @AppStorage("showLabels") private var showLabels = false
     @State private var isHovering = false
+    @State private var isDragging = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,11 +54,14 @@ struct WindowsTaskbarIcon: View {
         .background(
             RoundedRectangle(cornerRadius: 4)
                 .fill(
+                    isDragging ? Color.blue.opacity(0.5) :
                     app.runningApplication?.isActive == true ? 
                         Color.blue.opacity(0.3) : 
                         (isHovering ? Color.gray.opacity(0.3) : Color.clear)
                 )
         )
+        .scaleEffect(isDragging ? 1.1 : 1.0)
+        .opacity(isDragging ? 0.8 : 1.0)
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovering = hovering
@@ -75,6 +79,36 @@ struct WindowsTaskbarIcon: View {
                 }
             }
         )
+        .onDrag {
+            isDragging = true
+            
+            // Reset dragging state when drag ends
+            let dragEndObserver = NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("DragEnded"),
+                object: nil,
+                queue: .main
+            ) { _ in
+                isDragging = false
+            }
+            
+            // Clean up after a timeout as a fallback
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                NotificationCenter.default.removeObserver(dragEndObserver)
+                if isDragging {
+                    isDragging = false
+                }
+            }
+            
+            // Create item provider with the bundle identifier as plain text
+            let itemProvider = NSItemProvider()
+            itemProvider.registerDataRepresentation(forTypeIdentifier: "public.plain-text", visibility: .all) { completion in
+                let data = app.bundleIdentifier.data(using: .utf8) ?? Data()
+                completion(data, nil)
+                return nil
+            }
+            return itemProvider
+        }
+        .animation(.easeInOut(duration: 0.2), value: isDragging)
         .help(toolTip)
     }
     

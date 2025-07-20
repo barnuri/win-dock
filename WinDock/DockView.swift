@@ -5,9 +5,8 @@ struct DockView: View {
     @StateObject private var appManager = AppManager()
     @State private var showingPreview = false
     @State private var previewWindow: NSWindow?
-    @State private var draggedApp: DockApp?
     @State private var showStartMenu = false
-    @State private var dropInsertionIndex: Int?
+    @State private var dragOverIndex: Int? = nil
     @AppStorage("dockPosition") private var dockPosition: DockPosition = .bottom
     @AppStorage("dockSize") private var dockSize: DockSize = .medium
     @AppStorage("centerTaskbarIcons") private var centerTaskbarIcons = true
@@ -24,11 +23,9 @@ struct DockView: View {
         .background(Color.clear)
         .onAppear {
             appManager.startMonitoring()
-            setupDropHandler()
         }
         .onDisappear {
             appManager.stopMonitoring()
-            removeDropHandler()
         }
     }
     
@@ -159,117 +156,167 @@ struct DockView: View {
         return true
     }
 
-    private func setupDropHandler() {
-        NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("DockIconDropped"),
-            object: nil,
-            queue: .main
-        ) { notification in
-            handleIconDrop(notification)
-        }
-    }
-    
-    private func removeDropHandler() {
-        NotificationCenter.default.removeObserver(self, name: NSNotification.Name("DockIconDropped"), object: nil)
-    }
-    
-    private func handleIconDrop(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let droppedApp = userInfo["app"] as? DockApp,
-              let locationValue = userInfo["location"] as? NSValue else { return }
-        
-        let location = locationValue.pointValue
-        
-        // Calculate drop position
-        if let fromIndex = appManager.dockApps.firstIndex(of: droppedApp) {
-            let toIndex = calculateDropIndex(at: location)
-            if fromIndex != toIndex {
-                // Add visual feedback
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    dropInsertionIndex = toIndex
-                }
-                
-                // Perform the move after a short delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    appManager.moveApp(from: fromIndex, to: toIndex)
-                    
-                    // Clear the visual feedback
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        dropInsertionIndex = nil
-                    }
-                }
-            }
-        }
-    }
-    
-    private func calculateDropIndex(at location: CGPoint) -> Int {
-        let iconWidth: CGFloat = 56 // Icon width + spacing
-        let startX: CGFloat = centerTaskbarIcons ? (NSScreen.main?.frame.width ?? 1920) / 2 - CGFloat(appManager.dockApps.count * 28) : 120
-        
-        if dockPosition == .bottom || dockPosition == .top {
-            let relativeX = location.x - startX
-            let index = max(0, Int((relativeX + iconWidth/2) / iconWidth))
-            return min(index, appManager.dockApps.count)
-        } else {
-            // For vertical docks
-            let iconHeight: CGFloat = 56
-            let startY: CGFloat = 100 // Approximate start position
-            let relativeY = location.y - startY
-            let index = max(0, Int((relativeY + iconHeight/2) / iconHeight))
-            return min(index, appManager.dockApps.count)
-        }
-    }
-
     @ViewBuilder
     private var dockIconsSection: some View {
         if dockPosition == .bottom || dockPosition == .top {
             HStack(spacing: 2) {
                 ForEach(Array(appManager.dockApps.enumerated()), id: \.element.id) { index, app in
-                    WindowsTaskbarIcon(
-                        app: app,
-                        iconSize: dockSize.iconSize,
-                        appManager: appManager
-                    )
-                    .background(
-                        // Drop indicator
+                    HStack(spacing: 0) {
+                        // Insertion indicator before the icon
                         Rectangle()
-                            .fill(Color.accentColor.opacity(0.3))
-                            .frame(width: 2)
-                            .opacity(dropInsertionIndex == index ? 1.0 : 0.0)
-                            .offset(x: -28)
-                    )
+                            .fill(Color.accentColor)
+                            .frame(width: 3, height: 40)
+                            .opacity(dragOverIndex == index ? 0.8 : 0.0)
+                            .animation(.easeInOut(duration: 0.2), value: dragOverIndex)
+                        
+                        WindowsTaskbarIcon(
+                            app: app,
+                            iconSize: dockSize.iconSize,
+                            appManager: appManager
+                        )
+                    }
+                    .onDrop(of: ["public.plain-text"], delegate: DockDropDelegate(
+                        insertionIndex: index,
+                        appManager: appManager,
+                        onDragOver: { isOver in
+                            dragOverIndex = isOver ? index : nil
+                        }
+                    ))
                 }
                 
-                // Final drop indicator
+                // Final drop zone after all icons
                 Rectangle()
-                    .fill(Color.accentColor.opacity(0.3))
-                    .frame(width: 2, height: 40)
-                    .opacity(dropInsertionIndex == appManager.dockApps.count ? 1.0 : 0.0)
+                    .fill(Color.accentColor)
+                    .frame(width: 3, height: 40)
+                    .opacity(dragOverIndex == appManager.dockApps.count ? 0.8 : 0.0)
+                    .animation(.easeInOut(duration: 0.2), value: dragOverIndex)
+                    .onDrop(of: ["public.plain-text"], delegate: DockDropDelegate(
+                        insertionIndex: appManager.dockApps.count,
+                        appManager: appManager,
+                        onDragOver: { isOver in
+                            dragOverIndex = isOver ? appManager.dockApps.count : nil
+                        }
+                    ))
             }
         } else {
             VStack(spacing: 2) {
                 ForEach(Array(appManager.dockApps.enumerated()), id: \.element.id) { index, app in
-                    WindowsTaskbarIcon(
-                        app: app,
-                        iconSize: dockSize.iconSize,
-                        appManager: appManager
-                    )
-                    .background(
-                        // Drop indicator for vertical dock
+                    VStack(spacing: 0) {
+                        // Insertion indicator before the icon
                         Rectangle()
-                            .fill(Color.accentColor.opacity(0.3))
-                            .frame(height: 2)
-                            .opacity(dropInsertionIndex == index ? 1.0 : 0.0)
-                            .offset(y: -28)
-                    )
+                            .fill(Color.accentColor)
+                            .frame(width: 40, height: 3)
+                            .opacity(dragOverIndex == index ? 0.8 : 0.0)
+                            .animation(.easeInOut(duration: 0.2), value: dragOverIndex)
+                        
+                        WindowsTaskbarIcon(
+                            app: app,
+                            iconSize: dockSize.iconSize,
+                            appManager: appManager
+                        )
+                    }
+                    .onDrop(of: ["public.plain-text"], delegate: DockDropDelegate(
+                        insertionIndex: index,
+                        appManager: appManager,
+                        onDragOver: { isOver in
+                            dragOverIndex = isOver ? index : nil
+                        }
+                    ))
                 }
                 
-                // Final drop indicator for vertical dock
+                // Final drop zone after all icons
                 Rectangle()
-                    .fill(Color.accentColor.opacity(0.3))
-                    .frame(width: 40, height: 2)
-                    .opacity(dropInsertionIndex == appManager.dockApps.count ? 1.0 : 0.0)
+                    .fill(Color.accentColor)
+                    .frame(width: 40, height: 3)
+                    .opacity(dragOverIndex == appManager.dockApps.count ? 0.8 : 0.0)
+                    .animation(.easeInOut(duration: 0.2), value: dragOverIndex)
+                    .onDrop(of: ["public.plain-text"], delegate: DockDropDelegate(
+                        insertionIndex: appManager.dockApps.count,
+                        appManager: appManager,
+                        onDragOver: { isOver in
+                            dragOverIndex = isOver ? appManager.dockApps.count : nil
+                        }
+                    ))
             }
         }
+    }
+}
+
+// Drop delegate for handling insertions between icons
+struct DockDropDelegate: DropDelegate {
+    let insertionIndex: Int
+    let appManager: AppManager
+    let onDragOver: (Bool) -> Void
+    
+    func validateDrop(info: DropInfo) -> Bool {
+        // Check if the drop info contains plain text items
+        let hasCompatibleItem = info.hasItemsConforming(to: ["public.plain-text"])
+        AppLogger.shared.info("Validating drop - has compatible item: \(hasCompatibleItem)")
+        return hasCompatibleItem
+    }
+    
+    func dropEntered(info: DropInfo) {
+        onDragOver(true)
+    }
+    
+    func dropExited(info: DropInfo) {
+        onDragOver(false)
+    }
+    
+    func performDrop(info: DropInfo) -> Bool {
+        onDragOver(false)
+        
+        // Notify that drag has ended
+        NotificationCenter.default.post(name: NSNotification.Name("DragEnded"), object: nil)
+        
+        let providers = info.itemProviders(for: ["public.plain-text"])
+        guard let provider = providers.first else { 
+            AppLogger.shared.error("No item provider found")
+            return false 
+        }
+        
+        AppLogger.shared.info("Loading item with public.plain-text type")
+        
+        provider.loadDataRepresentation(forTypeIdentifier: "public.plain-text") { (data, error) in
+            if let error = error {
+                AppLogger.shared.error("Error loading data: \(error)")
+                return
+            }
+            
+            guard let data = data,
+                  let bundleIdentifier = String(data: data, encoding: .utf8) else {
+                AppLogger.shared.error("Could not extract bundle identifier from data")
+                return
+            }
+            
+            AppLogger.shared.info("Processing drop for bundle identifier: \(bundleIdentifier)")
+            
+            DispatchQueue.main.async {
+                let currentApps = appManager.dockApps
+                guard let draggedApp = currentApps.first(where: { $0.bundleIdentifier == bundleIdentifier }) else {
+                    AppLogger.shared.error("Could not find dragged app with bundle identifier: \(bundleIdentifier)")
+                    AppLogger.shared.info("Available apps: \(currentApps.map { $0.bundleIdentifier })")
+                    return
+                }
+                
+                guard let fromIndex = currentApps.firstIndex(of: draggedApp) else {
+                    AppLogger.shared.error("Could not find index of dragged app")
+                    return
+                }
+                
+                guard fromIndex != insertionIndex else {
+                    AppLogger.shared.info("Drop at same position, ignoring")
+                    return
+                }
+                
+                AppLogger.shared.info("Moving app from index \(fromIndex) to insertion index \(insertionIndex)")
+                
+                // Calculate the correct insertion index
+                let toIndex = fromIndex < insertionIndex ? insertionIndex - 1 : insertionIndex
+                appManager.moveApp(from: fromIndex, to: toIndex)
+            }
+        }
+        
+        return true
     }
 }
