@@ -147,6 +147,11 @@ struct GeneralSettingsTab: View {
                 .disabled(dockPosition == .left || dockPosition == .right)
             Toggle("Show system tray", isOn: $showSystemTray)
             Toggle("Show Task View button", isOn: $showTaskView)
+            
+            Divider()
+            
+            // Run on login toggle
+            RunOnLoginToggleView()
         }
     }
     
@@ -711,6 +716,52 @@ struct BackupSettingsTab: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+        }
+    }
+}
+
+}
+
+struct RunOnLoginToggleView: View {
+    @StateObject private var loginItemManager = LoginItemManager.shared
+    @State private var isEnabled: Bool = false
+    @State private var isProcessing: Bool = false
+    
+    var body: some View {
+        HStack {
+            Toggle("Run WinDock on login", isOn: $isEnabled)
+                .disabled(isProcessing)
+                .onChange(of: isEnabled) { newValue in
+                    updateLoginItemStatus(enabled: newValue)
+                }
+            
+            if isProcessing {
+                ProgressView()
+                    .scaleEffect(0.7)
+                    .frame(width: 16, height: 16)
+            }
+        }
+        .onAppear {
+            isEnabled = loginItemManager.isLoginItemEnabled
+        }
+    }
+    
+    private func updateLoginItemStatus(enabled: Bool) {
+        isProcessing = true
+        
+        // Perform the login item change on a background queue
+        DispatchQueue.global(qos: .userInitiated).async {
+            loginItemManager.isLoginItemEnabled = enabled
+            
+            DispatchQueue.main.async {
+                isProcessing = false
+                // Verify the change took effect
+                let actualStatus = loginItemManager.isLoginItemEnabled
+                if actualStatus != enabled {
+                    // Revert UI if the change failed
+                    isEnabled = actualStatus
+                }
+            }
         }
     }
 }

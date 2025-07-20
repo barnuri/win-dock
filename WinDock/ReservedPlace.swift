@@ -123,6 +123,26 @@ class ReservedPlaceWindow: NSWindow {
         
         // Update window frame
         setFrame(windowFrame, display: true)
+        
+        // Update window manager integration
+        if let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+            WindowManagerIntegration.shared.updateReservation(
+                displayID: displayID, 
+                area: windowFrame, 
+                position: dockPosition
+            )
+        }
+        
+        // Notify system about screen space change
+        DistributedNotificationCenter.default().post(
+            name: NSNotification.Name("WinDockScreenReservationChanged"),
+            object: nil,
+            userInfo: [
+                "position": dockPosition.rawValue,
+                "frame": NSStringFromRect(windowFrame),
+                "displayID": screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber ?? 0
+            ]
+        )
     }
     
     private func getDockHeight() -> CGFloat {

@@ -21,6 +21,14 @@ class WindowManagerIntegration: ObservableObject {
             object: nil
         )
         
+        // Listen for WinDock reservation updates
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDockReservationUpdate),
+            name: NSNotification.Name("WinDockScreenReservationChanged"),
+            object: nil
+        )
+        
         // Monitor for window resize events from system
         DistributedNotificationCenter.default().addObserver(
             self,
@@ -28,6 +36,91 @@ class WindowManagerIntegration: ObservableObject {
             name: NSNotification.Name("com.apple.accessibility.api"),
             object: nil
         )
+        
+        // Set up global window monitoring using NSWorkspace
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleApplicationActivation),
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil
+        )
+    }
+    
+    @objc private func handleDockReservationUpdate(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let positionString = userInfo["position"] as? String,
+              let position = DockPosition(rawValue: positionString),
+              let frameString = userInfo["frame"] as? String,
+              let displayIDNumber = userInfo["displayID"] as? NSNumber else { return }
+        
+        let displayID = displayIDNumber.uint32Value
+        let frame = NSRectFromString(frameString)
+        
+        updateReservation(displayID: CGDirectDisplayID(displayID), area: frame, position: position)
+        AppLogger.shared.info("Updated reservation from dock notification: \(frame)")
+    }
+    
+    @objc private func handleApplicationActivation(_ notification: Notification) {
+        // When applications activate, check if their windows need adjustment
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        
+        // Small delay to let the app settle
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.adjustWindowsForApplication(app)
+        }
+    }
+    
+    private func adjustWindowsForApplication(_ app: NSRunningApplication) {
+        // Get all windows for this application
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return
+        }
+        
+        for windowInfo in windowList {
+            guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
+                  ownerPID == app.processIdentifier,
+                  let windowID = windowInfo[kCGWindowNumber as String] as? CGWindowID,
+                  let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: Any],
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+            
+            // Check if window appears to be maximized (taking up most of screen)
+            for screen in NSScreen.screens {
+                let screenFrame = screen.frame
+                let tolerance: CGFloat = 50
+                
+                if abs(bounds.width - screenFrame.width) <= tolerance &&
+                   abs(bounds.height - screenFrame.height) <= tolerance {
+                    // Window appears maximized, adjust it
+                    adjustWindowForDockArea(windowID: windowID, screen: screen)
+                }
+            }
+        }
+    }
+    
+    private func adjustWindowForDockArea(windowID: CGWindowID, screen: NSScreen) {
+        guard let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+              let reservedArea = reservedAreas[displayID] else { return }
+        
+        let screenFrame = screen.frame
+        var adjustedFrame = screenFrame
+        
+        // Adjust the available area based on dock position
+        switch dockPosition {
+        case .bottom:
+            adjustedFrame.size.height -= reservedArea.height
+            adjustedFrame.origin.y += reservedArea.height
+        case .top:
+            adjustedFrame.size.height -= reservedArea.height
+        case .left:
+            adjustedFrame.origin.x += reservedArea.width
+            adjustedFrame.size.width -= reservedArea.width
+        case .right:
+            adjustedFrame.size.width -= reservedArea.width
+        }
+        
+        // Move and resize the window using Core Graphics
+        CGWindowSetBounds(windowID, adjustedFrame)
+        AppLogger.shared.info("Adjusted maximized window to respect dock area: \(adjustedFrame)")
     }
     
     func updateReservation(displayID: CGDirectDisplayID, area: CGRect, position: DockPosition) {
