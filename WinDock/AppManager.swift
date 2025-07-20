@@ -365,20 +365,43 @@ class AppManager: ObservableObject {
             // Force app to front and activate
             AppLogger.shared.info("Activating running app: \(app.name)")
             
-            if #available(macOS 14.0, *) {
-                runningApp.activate()
-            } else {
-                runningApp.activate(options: [.activateIgnoringOtherApps])
-            }
-            
             // Ensure the app is unhidden if it was hidden
             if runningApp.isHidden {
                 runningApp.unhide()
             }
             
-            // Force the app to the front using NSApplication
+            // Activate with all available options to ensure it comes to front
+            if #available(macOS 14.0, *) {
+                runningApp.activate()
+            } else {
+                runningApp.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
+            }
+            
+            // Use AppleScript to ensure the app is brought to the very front
+            let bringToFrontScript = """
+            tell application "\(app.name)"
+                activate
+            end tell
+            tell application "System Events"
+                tell process "\(app.name)"
+                    set frontmost to true
+                    try
+                        perform action "AXRaise" of window 1
+                    end try
+                end tell
+            end tell
+            """
+            
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                NSApp.activate(ignoringOtherApps: true)
+                if let appleScript = NSAppleScript(source: bringToFrontScript) {
+                    var error: NSDictionary?
+                    appleScript.executeAndReturnError(&error)
+                    if let error = error {
+                        AppLogger.shared.error("Bring to front AppleScript error: \(error)")
+                    }
+                }
+                
+                // Additional activation attempt
                 if #available(macOS 14.0, *) {
                     runningApp.activate()
                 } else {

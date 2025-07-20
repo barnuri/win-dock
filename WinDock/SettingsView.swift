@@ -37,6 +37,47 @@ struct SettingsView: View {
                 }
         }
         .frame(minWidth: 1024, minHeight: 600)
+        .onAppear {
+            configureSettingsWindowToStayOnTop()
+        }
+    }
+    
+    private func configureSettingsWindowToStayOnTop() {
+        DispatchQueue.main.async {
+            // Find any window that's likely the settings window
+            for window in NSApp.windows {
+                // Check if this is a settings window by looking for TabView content or similar characteristics
+                if window.isVisible && 
+                   window.title.isEmpty == false && 
+                   window.contentViewController != nil {
+                    
+                    // Set window level to floating to stay on top
+                    window.level = .floating
+                    
+                    // Ensure window is always visible and can't be hidden by other apps
+                    window.hidesOnDeactivate = false
+                    
+                    // Make the window stay on top even when app loses focus
+                    window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+                    
+                    AppLogger.shared.info("Settings window configured to stay on top")
+                    break
+                }
+            }
+            
+            // Additional attempt with delay to catch window after it's fully initialized
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                for window in NSApp.windows {
+                    if window.isVisible && window.level != .floating {
+                        window.level = .floating
+                        window.hidesOnDeactivate = false
+                        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+                        AppLogger.shared.info("Settings window configured to stay on top (delayed attempt)")
+                        break
+                    }
+                }
+            }
+        }
     }
 }
 

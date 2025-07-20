@@ -1,3 +1,5 @@
 - Support drag and drop to reorder dock
 - fix WindowPreviewView to show window preview when mouse over on app
 - Reserve place for dock app in all screen to affect max window feature
+- show underline under apps if they are running (like windows 11)
+- show notification badge on dock app icon if there are notifications in top right corner
