@@ -586,7 +586,6 @@ class AppManager: ObservableObject {
         let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int ?? 0
         UserDefaults.standard.set(NSStringFromRect(reservedArea), forKey: "WinDock.ReservedArea.\(screenNumber)")
         
-        // Notify the system about the reserved area
         // This is a simplified version - actual implementation would use CGSSetScreenResolution or similar
         AppLogger.shared.info("Reserved screen area: \(reservedArea) for screen: \(screen.localizedName)")
     }

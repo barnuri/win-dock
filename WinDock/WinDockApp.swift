@@ -3,14 +3,12 @@ import AppKit
 import Foundation
 import Darwin
 import ObjectiveC
+import SettingsAccess
 
 // Import for ProcessSerialNumber and TransformProcessType
 #if os(macOS)
 import ApplicationServices
 #endif
-
-// Key for associated objects
-private var windowDelegateKey: UInt8 = 0
 
 private func setGlobalErrorHandlers() {
     NSSetUncaughtExceptionHandler { exception in
@@ -31,9 +29,15 @@ struct WinDockApp: App {
     var body: some Scene {
         WindowGroup("WinDock") {
             // Main content view with minimal size to ensure app is visible in dock
-            ReservedPlace()
-                .frame(width: 1, height: 1)
-                .opacity(0.01) // Very slight opacity to keep window registered
+            ZStack {
+                ReservedPlace()
+                    .frame(width: 1, height: 1)
+                    .opacity(0.01) // Very slight opacity to keep window registered
+                
+                // Hidden helper for SettingsAccess
+                SettingsAccessHelper()
+            }
+            .openSettingsAccess()
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -56,9 +60,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastPaddingBottom: Double = 0.0
     private var lastPaddingLeft: Double = 0.0
     private var lastPaddingRight: Double = 0.0
-    
-    // Variable to keep a reference to the settings window
-    private var settingsWindow: NSWindow?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         setGlobalErrorHandlers()
@@ -112,14 +113,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
     
-    func applicationWillTerminate(_ notification: Notification) {
-        AppLogger.shared.info("Application will terminate")
-        
-        // Save window positions when app quits
-        if let settingsWindow = settingsWindow {
-            saveSettingsWindowFrame(settingsWindow)
-        }
-    }
     
     private func setupApplicationMenu() {
         // Create the main menu for the application
@@ -128,12 +121,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Application menu (first menu)
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
-        
-        // About item
-        let aboutItem = NSMenuItem(title: "About Win Dock", action: #selector(openAboutWindow), keyEquivalent: "")
-        aboutItem.target = self
-        appMenu.addItem(aboutItem)
-        
+               
         // Separator
         appMenu.addItem(NSMenuItem.separator())
         
@@ -351,11 +339,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(appNameItem)
         menu.addItem(NSMenuItem.separator())
         
-        // About menu item
-        let aboutItem = NSMenuItem(title: "About Win Dock", action: #selector(openAboutWindow), keyEquivalent: "")
-        aboutItem.target = self
-        menu.addItem(aboutItem)
-        
+       
         // Settings menu item
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettingsMenu), keyEquivalent: ",")
         settingsItem.target = self
@@ -626,133 +610,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         AppLogger.shared.info("Opening settings window")
         NSApp.activate(ignoringOtherApps: true)
         
-        // Try multiple approaches to ensure settings open
-        
-        // First try the standard mechanism for SwiftUI Settings scene
-        if NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
-            AppLogger.shared.info("Settings window opened via standard SwiftUI mechanism")
-            return
-        }
-        
-        // If that fails, try showing preferences directly
-        if NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil) {
-            AppLogger.shared.info("Settings window opened via preferences window selector")
-            return
-        }
-        
-        // As a last resort, create and show settings window manually
-        let window = createSettingsWindowIfNeeded()
-        window.makeKeyAndOrderFront(nil)
-        window.orderFrontRegardless()
-        
-        AppLogger.shared.info("Settings window created and displayed using manual approach")
+        // Use SettingsHelper to trigger settings opening via SettingsAccess
+        SettingsHelper.shared.requestOpenSettings()
     }
-    
-    // Helper method to create and display the settings window
-    private func createSettingsWindowIfNeeded() -> NSWindow {
-        // If we already have a window, just use it
-        if let existingWindow = settingsWindow {
-            return existingWindow
-        }
-        
-        // Create and configure settings window
-        let newSettingsWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 700, height: 550),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        
-        // Set window properties
-        newSettingsWindow.title = "WinDock Settings"
-        newSettingsWindow.isReleasedWhenClosed = false
-        newSettingsWindow.minSize = NSSize(width: 600, height: 400)
-        
-        // Restore saved position or center the window
-        if let frameString = UserDefaults.standard.string(forKey: "SettingsWindowFrame") {
-            let frame = NSRectFromString(frameString)
-            // Validate frame to ensure it's visible on current screens
-            let validFrame = validateWindowFrame(frame)
-            newSettingsWindow.setFrame(validFrame, display: true)
-            AppLogger.shared.debug("Restored settings window frame: \(validFrame)")
-        } else {
-            newSettingsWindow.center()
-        }
-        
-        // Create the SwiftUI view
-        let settingsView = SettingsView()
-        let hostingController = NSHostingController(rootView: settingsView)
-        
-        // Set the view controller
-        newSettingsWindow.contentViewController = hostingController
-        
-        // Create a strong reference to the delegate and store it
-        let windowDelegate = SettingsWindowDelegate(appDelegate: self)
-        
-        // Set the window delegate to track position
-        newSettingsWindow.delegate = windowDelegate
-        
-        // Store references to prevent deallocation
-        settingsWindow = newSettingsWindow
-        
-        // Store the delegate in associated object to keep it alive
-        objc_setAssociatedObject(newSettingsWindow, &windowDelegateKey, windowDelegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        
-        return newSettingsWindow
-    }
-    
-    // Function to validate window frame to ensure it's visible on screen
-    private func validateWindowFrame(_ frame: NSRect) -> NSRect {
-        let minSize = NSSize(width: 600, height: 400)
-        var validFrame = frame
-        
-        // Ensure minimum size
-        if validFrame.size.width < minSize.width {
-            validFrame.size.width = minSize.width
-        }
-        if validFrame.size.height < minSize.height {
-            validFrame.size.height = minSize.height
-        }
-        
-        // Find the screen that contains at least some part of the window
-        let containingScreen = NSScreen.screens.first { screen in
-            screen.frame.intersects(validFrame)
-        } ?? NSScreen.main ?? NSScreen.screens.first
-        
-        guard let screen = containingScreen else {
-            // If no screens are found, return the original frame
-            return validFrame
-        }
-        
-        // Make sure the window is visible on screen
-        if validFrame.maxX < screen.frame.minX + 100 {
-            validFrame.origin.x = screen.frame.minX + 50
-        }
-        if validFrame.minX > screen.frame.maxX - 100 {
-            validFrame.origin.x = screen.frame.maxX - validFrame.width - 50
-        }
-        if validFrame.maxY < screen.frame.minY + 100 {
-            validFrame.origin.y = screen.frame.minY + 50
-        }
-        if validFrame.minY > screen.frame.maxY - 100 {
-            validFrame.origin.y = screen.frame.maxY - validFrame.height - 50
-        }
-        
-        return validFrame
-    }
-    
-    // Save window position and size
-    func saveSettingsWindowFrame(_ window: NSWindow) {
-        let frame = window.frame
-        UserDefaults.standard.set(NSStringFromRect(frame), forKey: "SettingsWindowFrame")
-        AppLogger.shared.debug("Saved settings window frame: \(frame)")
-    }
-    
-    @objc func openAboutWindow() {
-        AppLogger.shared.info("Opening about window")
-        AboutWindow.showAboutWindow()
-    }
-    
     @objc func showLogsFolder() {
         AppLogger.shared.info("Opening logs folder")
         AppLogger.shared.showLogsInFinder()
@@ -764,28 +624,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     deinit {
         NotificationCenter.default.removeObserver(self)
-    }
-}
-
-// Window delegate to capture window position changes
-class SettingsWindowDelegate: NSObject, NSWindowDelegate {
-    weak var appDelegate: AppDelegate?
-    
-    init(appDelegate: AppDelegate) {
-        self.appDelegate = appDelegate
-        super.init()
-    }
-    
-    func windowDidResize(_ notification: Notification) {
-        if let window = notification.object as? NSWindow {
-            appDelegate?.saveSettingsWindowFrame(window)
-        }
-    }
-    
-    func windowDidMove(_ notification: Notification) {
-        if let window = notification.object as? NSWindow {
-            appDelegate?.saveSettingsWindowFrame(window)
-        }
     }
 }
 

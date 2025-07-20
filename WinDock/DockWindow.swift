@@ -40,7 +40,7 @@ class DockWindow: NSPanel {
     
     private func setup() {
         if isPreview { return }
-        level = .normal // Use normal level to appear in Alt+Tab
+        level = .floating // Use normal level to appear in Alt+Tab
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .participatesInCycle]
         backgroundColor = .clear
         isOpaque = false
