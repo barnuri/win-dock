@@ -71,7 +71,8 @@ struct DockContextMenuView: View {
     }
     
     private func openSettings() {
-        AppDelegate.openSettingsWindow()
+        AppLogger.shared.info("Opening settings from DockContextMenuView")
+        SettingsHelper.shared.requestOpenSettings()
     }
     
     private func quitWinDock() {

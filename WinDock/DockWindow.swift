@@ -189,9 +189,8 @@ class DockWindow: NSPanel {
     }
     
     @objc private func openSettings() {
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            appDelegate.openSettings()
-        }
+        AppLogger.shared.info("Opening settings from DockWindow context menu")
+        SettingsHelper.shared.requestOpenSettings()
     }
     
     @objc private func quitApp() {

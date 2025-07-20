@@ -296,7 +296,8 @@ struct StartMenuView: View {
     }
     
     private func openWinDockSettings() {
-        AppDelegate.openSettingsWindow()
+        AppLogger.shared.info("Opening WinDock settings from StartMenuView")
+        SettingsHelper.shared.requestOpenSettings()
         dismiss()
     }
     
