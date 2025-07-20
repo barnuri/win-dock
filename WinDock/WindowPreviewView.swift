@@ -78,7 +78,7 @@ struct WindowPreviewView: View {
         isLoading = true
         
         DispatchQueue.global(qos: .userInitiated).async {
-            let previews = generateWindowPreviews()
+            let previews = self.generateWindowPreviews()
             
             DispatchQueue.main.async {
                 self.windowPreviews = previews
@@ -90,10 +90,9 @@ struct WindowPreviewView: View {
     private func generateWindowPreviews() -> [WindowPreview] {
         var previews: [WindowPreview] = []
         
-        // For now, create mock previews based on window count
-        // In a production app, you would use ScreenCaptureKit for real window capture
+        // Use real window information from the app
         for window in app.windows {
-            if let image = createPlaceholderPreview(for: window, index: 0) {
+            if let image = captureWindowPreview(for: window) ?? createPlaceholderPreview(for: window, index: previews.count) {
                 let windowTitle = window.title.isEmpty ? app.name : window.title
                 let preview = WindowPreview(
                     windowID: window.windowID,
@@ -121,6 +120,12 @@ struct WindowPreviewView: View {
         }
         
         return previews
+    }
+    
+    private func captureWindowPreview(for window: WindowInfo) -> NSImage? {
+        // For now, return nil to use placeholder - ScreenCaptureKit would be the proper way
+        // but it requires more complex setup and permissions
+        return nil
     }
     
     private func createPlaceholderPreview(for window: WindowInfo?, index: Int) -> NSImage? {
@@ -291,7 +296,10 @@ struct WindowPreviewItem: View {
             isRunning: true,
             isPinned: true,
             windowCount: 3,
-            runningApplication: nil
+            runningApplication: nil,
+            windows: [],
+            notificationCount: 0,
+            hasNotifications: false
         ),
         appManager: AppManager()
     )

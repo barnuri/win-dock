@@ -9,6 +9,8 @@ struct WindowsTaskbarIcon: View {
     @AppStorage("showLabels") private var showLabels = false
     @State private var isHovering = false
     @State private var isDragging = false
+    @State private var showWindowPreview = false
+    @State private var hoverTimer: Timer?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,6 +39,40 @@ struct WindowsTaskbarIcon: View {
                     }
                     .offset(y: 16)
                 }
+                
+                // Notification badge (top right corner)
+                if app.hasNotifications {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 12, height: 12)
+                                .overlay(
+                                    Text("\(min(app.notificationCount, 9))")
+                                        .font(.system(size: 8, weight: .bold))
+                                        .foregroundColor(.white)
+                                )
+                                .offset(x: 4, y: -4)
+                        }
+                        Spacer()
+                    }
+                }
+            }
+            
+            // Running indicator underline (Windows 11 style)
+            if app.isRunning {
+                Rectangle()
+                    .fill(app.runningApplication?.isActive == true ? Color.accentColor : Color.primary.opacity(0.6))
+                    .frame(width: 20, height: 2)
+                    .cornerRadius(1)
+                    .padding(.top, 2)
+            } else {
+                // Placeholder to maintain consistent spacing
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: 20, height: 2)
+                    .padding(.top, 2)
             }
             
             // App label (optional)
@@ -50,7 +86,7 @@ struct WindowsTaskbarIcon: View {
                     .padding(.top, 2)
             }
         }
-        .frame(width: 54, height: showLabels ? 72 : 54)
+        .frame(width: 54, height: showLabels ? 78 : 60) // Increased height to accommodate underline
         .background(
             RoundedRectangle(cornerRadius: 4)
                 .fill(
@@ -65,6 +101,20 @@ struct WindowsTaskbarIcon: View {
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovering = hovering
+            if hovering && app.isRunning && app.windowCount > 0 {
+                // Start timer for preview delay
+                hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
+                    showWindowPreview = true
+                }
+            } else {
+                // Cancel timer and hide preview
+                hoverTimer?.invalidate()
+                hoverTimer = nil
+                showWindowPreview = false
+            }
+        }
+        .popover(isPresented: $showWindowPreview, arrowEdge: .top) {
+            WindowPreviewView(app: app, appManager: appManager)
         }
         .onTapGesture {
             handleTap()
@@ -125,10 +175,9 @@ struct WindowsTaskbarIcon: View {
             }
         } else {
             tooltip += " - Click to launch"
-        }
+        }        
         return tooltip
     }
-    
     
     private func handleTap() {
         AppLogger.shared.info("WindowsTaskbarIcon handleTap for \(app.name)")
