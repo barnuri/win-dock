@@ -10,4 +10,5 @@ pkill -f "WinDock.app" 2>/dev/null || true
 # Wait a moment for the process to fully terminate
 sleep 1
 
-swift run
+open ./build/Build/Products/Release/WinDock.app
+# swift run

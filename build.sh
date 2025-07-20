@@ -4,8 +4,7 @@ set -e
 rm -rf build/Build/Products/Release || true # Clean previous build artifacts
 
 # Only show errors from xcodebuild (no grep, use xcodebuild options)
-# xcodebuild -project WinDock.xcodeproj -scheme WinDock -configuration Release -derivedDataPath build -quiet -showBuildTimingSummary -hideShellScriptEnvironment | xcpretty && exit ${PIPESTATUS[0]}
-swift build
+xcodebuild -scheme WinDock -configuration Release -derivedDataPath build -quiet -showBuildTimingSummary -hideShellScriptEnvironment | xcpretty && exit ${PIPESTATUS[0]}
 
 # Copy icon.png to the app's resources directory
 if [ -f "icon.png" ]; then

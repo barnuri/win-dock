@@ -1,0 +1,598 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A290C7232E2CD6E600E928C3 /* SettingsAccess in Frameworks */ = {isa = PBXBuildFile; productRef = A290C7222E2CD6E600E928C3 /* SettingsAccess */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A25663D52E1B0B41001A02DB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A25663BE2E1B0B3E001A02DB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A25663C52E1B0B3E001A02DB;
+			remoteInfo = WinDock;
+		};
+		A25663DF2E1B0B41001A02DB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A25663BE2E1B0B3E001A02DB /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A25663C52E1B0B3E001A02DB;
+			remoteInfo = WinDock;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		A25663C62E1B0B3E001A02DB /* WinDock.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WinDock.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A25663D42E1B0B41001A02DB /* WinDockTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WinDockTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A25663DE2E1B0B41001A02DB /* WinDockUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WinDockUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A25663C82E1B0B3E001A02DB /* WinDock */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WinDock;
+			sourceTree = "<group>";
+		};
+		A25663D72E1B0B41001A02DB /* WinDockTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WinDockTests;
+			sourceTree = "<group>";
+		};
+		A25663E12E1B0B41001A02DB /* WinDockUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WinDockUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A25663C32E1B0B3E001A02DB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A290C7232E2CD6E600E928C3 /* SettingsAccess in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A25663D12E1B0B41001A02DB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A25663DB2E1B0B41001A02DB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A25663BD2E1B0B3E001A02DB = {
+			isa = PBXGroup;
+			children = (
+				A25663C82E1B0B3E001A02DB /* WinDock */,
+				A25663D72E1B0B41001A02DB /* WinDockTests */,
+				A25663E12E1B0B41001A02DB /* WinDockUITests */,
+				A290C7212E2CD6E600E928C3 /* Frameworks */,
+				A25663C72E1B0B3E001A02DB /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A25663C72E1B0B3E001A02DB /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A25663C62E1B0B3E001A02DB /* WinDock.app */,
+				A25663D42E1B0B41001A02DB /* WinDockTests.xctest */,
+				A25663DE2E1B0B41001A02DB /* WinDockUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A290C7212E2CD6E600E928C3 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A25663C52E1B0B3E001A02DB /* WinDock */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A25663E82E1B0B41001A02DB /* Build configuration list for PBXNativeTarget "WinDock" */;
+			buildPhases = (
+				A25663C22E1B0B3E001A02DB /* Sources */,
+				A25663C32E1B0B3E001A02DB /* Frameworks */,
+				A25663C42E1B0B3E001A02DB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A25663C82E1B0B3E001A02DB /* WinDock */,
+			);
+			name = WinDock;
+			packageProductDependencies = (
+				A290C7222E2CD6E600E928C3 /* SettingsAccess */,
+			);
+			productName = WinDock;
+			productReference = A25663C62E1B0B3E001A02DB /* WinDock.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A25663D32E1B0B41001A02DB /* WinDockTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A25663EB2E1B0B41001A02DB /* Build configuration list for PBXNativeTarget "WinDockTests" */;
+			buildPhases = (
+				A25663D02E1B0B41001A02DB /* Sources */,
+				A25663D12E1B0B41001A02DB /* Frameworks */,
+				A25663D22E1B0B41001A02DB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A25663D62E1B0B41001A02DB /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A25663D72E1B0B41001A02DB /* WinDockTests */,
+			);
+			name = WinDockTests;
+			packageProductDependencies = (
+			);
+			productName = WinDockTests;
+			productReference = A25663D42E1B0B41001A02DB /* WinDockTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A25663DD2E1B0B41001A02DB /* WinDockUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A25663EE2E1B0B41001A02DB /* Build configuration list for PBXNativeTarget "WinDockUITests" */;
+			buildPhases = (
+				A25663DA2E1B0B41001A02DB /* Sources */,
+				A25663DB2E1B0B41001A02DB /* Frameworks */,
+				A25663DC2E1B0B41001A02DB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A25663E02E1B0B41001A02DB /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A25663E12E1B0B41001A02DB /* WinDockUITests */,
+			);
+			name = WinDockUITests;
+			packageProductDependencies = (
+			);
+			productName = WinDockUITests;
+			productReference = A25663DE2E1B0B41001A02DB /* WinDockUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A25663BE2E1B0B3E001A02DB /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1640;
+				LastUpgradeCheck = 1640;
+				TargetAttributes = {
+					A25663C52E1B0B3E001A02DB = {
+						CreatedOnToolsVersion = 16.4;
+					};
+					A25663D32E1B0B41001A02DB = {
+						CreatedOnToolsVersion = 16.4;
+						TestTargetID = A25663C52E1B0B3E001A02DB;
+					};
+					A25663DD2E1B0B41001A02DB = {
+						CreatedOnToolsVersion = 16.4;
+						TestTargetID = A25663C52E1B0B3E001A02DB;
+					};
+				};
+			};
+			buildConfigurationList = A25663C12E1B0B3E001A02DB /* Build configuration list for PBXProject "WinDock" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A25663BD2E1B0B3E001A02DB;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A290C6ED2E2CC95100E928C3 /* XCRemoteSwiftPackageReference "SettingsAccess" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A25663C72E1B0B3E001A02DB /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A25663C52E1B0B3E001A02DB /* WinDock */,
+				A25663D32E1B0B41001A02DB /* WinDockTests */,
+				A25663DD2E1B0B41001A02DB /* WinDockUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A25663C42E1B0B3E001A02DB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A25663D22E1B0B41001A02DB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A25663DC2E1B0B41001A02DB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A25663C22E1B0B3E001A02DB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A25663D02E1B0B41001A02DB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A25663DA2E1B0B41001A02DB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A25663D62E1B0B41001A02DB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A25663C52E1B0B3E001A02DB /* WinDock */;
+			targetProxy = A25663D52E1B0B41001A02DB /* PBXContainerItemProxy */;
+		};
+		A25663E02E1B0B41001A02DB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A25663C52E1B0B3E001A02DB /* WinDock */;
+			targetProxy = A25663DF2E1B0B41001A02DB /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		A25663E62E1B0B41001A02DB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A25663E72E1B0B41001A02DB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		A25663E92E1B0B41001A02DB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_ENTITLEMENTS = WinDock/WinDock.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = U4NNV8K8GA;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WinDock/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Win Dock";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = barnuri.WinDock;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A25663EA2E1B0B41001A02DB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_ENTITLEMENTS = WinDock/WinDock.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = U4NNV8K8GA;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WinDock/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Win Dock";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = barnuri.WinDock;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A25663EC2E1B0B41001A02DB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = barnuri.WinDockTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WinDock.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/WinDock";
+			};
+			name = Debug;
+		};
+		A25663ED2E1B0B41001A02DB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = barnuri.WinDockTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WinDock.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/WinDock";
+			};
+			name = Release;
+		};
+		A25663EF2E1B0B41001A02DB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = barnuri.WinDockUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = WinDock;
+			};
+			name = Debug;
+		};
+		A25663F02E1B0B41001A02DB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = barnuri.WinDockUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = WinDock;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A25663C12E1B0B3E001A02DB /* Build configuration list for PBXProject "WinDock" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A25663E62E1B0B41001A02DB /* Debug */,
+				A25663E72E1B0B41001A02DB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A25663E82E1B0B41001A02DB /* Build configuration list for PBXNativeTarget "WinDock" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A25663E92E1B0B41001A02DB /* Debug */,
+				A25663EA2E1B0B41001A02DB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A25663EB2E1B0B41001A02DB /* Build configuration list for PBXNativeTarget "WinDockTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A25663EC2E1B0B41001A02DB /* Debug */,
+				A25663ED2E1B0B41001A02DB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A25663EE2E1B0B41001A02DB /* Build configuration list for PBXNativeTarget "WinDockUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A25663EF2E1B0B41001A02DB /* Debug */,
+				A25663F02E1B0B41001A02DB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A290C6ED2E2CC95100E928C3 /* XCRemoteSwiftPackageReference "SettingsAccess" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/orchetect/SettingsAccess";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.1.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A290C7222E2CD6E600E928C3 /* SettingsAccess */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A290C6ED2E2CC95100E928C3 /* XCRemoteSwiftPackageReference "SettingsAccess" */;
+			productName = SettingsAccess;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A25663BE2E1B0B3E001A02DB /* Project object */;
+}
