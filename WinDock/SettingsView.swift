@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
     @StateObject private var dockManager = MacOSDockManager()
@@ -92,10 +93,9 @@ struct GeneralSettingsTab: View {
     @AppStorage("searchAppChoice") private var searchAppChoice: SearchAppChoice = .spotlight
     @AppStorage("use24HourClock") private var use24HourClock = true
     @AppStorage("dateFormat") private var dateFormat: DateFormat = .ddMMyyyy
-    @AppStorage("paddingTop") private var paddingTop: Double = 0.0
-    @AppStorage("paddingBottom") private var paddingBottom: Double = 0.0
-    @AppStorage("paddingLeft") private var paddingLeft: Double = 0.0
-    @AppStorage("paddingRight") private var paddingRight: Double = 0.0
+    @AppStorage("paddingVertical") private var paddingVertical: Double = 0.0
+    @AppStorage("paddingHorizontal") private var paddingHorizontal: Double = 0.0
+    @AppStorage("enableWindowsResize") private var enableWindowsResize: Bool = true
     
     let dockManager: MacOSDockManager
     
@@ -148,6 +148,21 @@ struct GeneralSettingsTab: View {
             Toggle("Show system tray", isOn: $showSystemTray)
             Toggle("Show Task View button", isOn: $showTaskView)
             
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Prevent windows from overlapping taskbar", isOn: $enableWindowsResize)
+                    .onChange(of: enableWindowsResize) { _, newValue in
+                        if newValue {
+                            WindowsResizeManager.shared.start()
+                        } else {
+                            WindowsResizeManager.shared.stop()
+                        }
+                    }
+                
+                Text("Automatically moves or resizes windows that overlap with the taskbar")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            
             Divider()
             
             // Run on login toggle
@@ -186,10 +201,8 @@ struct GeneralSettingsTab: View {
     private var paddingSection: some View {
         Section("Taskbar Padding") {
             VStack(alignment: .leading, spacing: 12) {
-                paddingSlider(title: "Top", value: $paddingTop)
-                paddingSlider(title: "Bottom", value: $paddingBottom)
-                paddingSlider(title: "Left", value: $paddingLeft)
-                paddingSlider(title: "Right", value: $paddingRight)
+                paddingSlider(title: "Vertical", value: $paddingVertical)
+                paddingSlider(title: "Horizontal", value: $paddingHorizontal)
             }
             
             Text("Adjust spacing around the taskbar edges.")
@@ -770,55 +783,6 @@ struct RunOnLoginToggleView: View {
                 }
             }
         }
-    }
-}
-
-func getDockHeight() -> CGFloat {
-    let dockSizeString = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
-    let dockSize = DockSize(rawValue: dockSizeString) ?? .medium
-    return dockSize.height
-}
-
-func dockFrame(for position: DockPosition, screen: NSScreen) -> NSRect {
-    let visibleFrame = screen.visibleFrame
-    let dockHeight: CGFloat = getDockHeight()
-    
-    // Get padding values from UserDefaults
-    let paddingTop = CGFloat(UserDefaults.standard.double(forKey: "paddingTop"))
-    let paddingBottom = CGFloat(UserDefaults.standard.double(forKey: "paddingBottom"))
-    let paddingLeft = CGFloat(UserDefaults.standard.double(forKey: "paddingLeft"))
-    let paddingRight = CGFloat(UserDefaults.standard.double(forKey: "paddingRight"))
-    
-    switch position {
-    case .bottom:
-        // Use full screen frame for bottom to avoid safe area
-        return NSRect(
-            x: visibleFrame.minX + paddingLeft,
-            y: visibleFrame.minY + paddingBottom,
-            width: visibleFrame.width - paddingLeft - paddingRight,
-            height: dockHeight
-        )
-    case .top:
-        return NSRect(
-            x: visibleFrame.minX + paddingLeft,
-            y: visibleFrame.maxY - dockHeight - paddingTop,
-            width: visibleFrame.width - paddingLeft - paddingRight,
-            height: dockHeight
-        )
-    case .left:
-        return NSRect(
-            x: visibleFrame.minX + paddingLeft,
-            y: visibleFrame.minY + paddingBottom,
-            width: dockHeight,
-            height: visibleFrame.height - paddingTop - paddingBottom
-        )
-    case .right:
-        return NSRect(
-            x: visibleFrame.maxX - dockHeight - paddingRight,
-            y: visibleFrame.minY + paddingBottom,
-            width: dockHeight,
-            height: visibleFrame.height - paddingTop - paddingBottom
-        )
     }
 }
 

@@ -1,19 +1,31 @@
-import Foundation
 import AppKit
 import CoreGraphics
+import SwiftUI
+
+// This class manages the resizing of windows to prevent overlap with the dock area.
+// It observes window events and adjusts positions as necessary.
+// It also handles dock area updates based on user settings and screen parameters.
+// The manager runs in the background and can be started/stopped based on user preferences.
+// It prefers to only move windows that are overlapping the dock area.
+// Resizing is a secondary action to ensure the window remains on screen after being moved.
+// do it only for the running, active and visible windows
+// create relevant logs of start, stop, and adjustments
+// This class is a singleton to ensure only one instance manages window resizing across the app.
 
 class WindowsResizeManager: ObservableObject {
     static let shared = WindowsResizeManager()
+
+    @Published private(set) var isRunning = false
     
-    private var isRunning = false
-    private var observers: [AXObserver] = []
-    private var observerInfos: [(observer: AXObserver, app: NSRunningApplication, element: AXUIElement)] = []
+    // Cache for dock areas to avoid recalculating too often
     private var dockAreas: [NSScreen: CGRect] = [:]
     private var dockPosition: DockPosition = .bottom
     private var monitoringTimer: Timer?
-    private var recentlyAdjustedWindows: Set<CGWindowID> = []
-    private var lastAdjustmentTime: [CGWindowID: Date] = [:]
     
+    // Track last update to avoid too frequent updates
+    private var lastUpdateTime: TimeInterval = 0
+    private let minimumUpdateInterval: TimeInterval = 0.1 // 100ms minimum between updates
+
     private init() {
         setupNotifications()
         updateDockAreaFromSettings()
@@ -23,600 +35,315 @@ class WindowsResizeManager: ObservableObject {
         stop()
         NotificationCenter.default.removeObserver(self)
     }
-    
+
     func start() {
         guard !isRunning else { return }
-        
+
         if !checkAccessibilityPermissions() {
-            let errorMessage = "WindowsResizeManager failed to start: Accessibility permissions not granted"
-            AppLogger.shared.error(errorMessage)
             requestAccessibilityPermissions()
             return
         }
-        
+
         isRunning = true
         updateDockAreaFromSettings()
-        setupWindowMonitoring()
         startPeriodicMonitoring()
-        AppLogger.shared.info("WindowsResizeManager started successfully")
+        AppLogger.shared.info("WindowsResizeManager started successfully.")
     }
-    
+
     func stop() {
         guard isRunning else { return }
-        
+
         isRunning = false
-        cleanupObservers()
         monitoringTimer?.invalidate()
         monitoringTimer = nil
-        AppLogger.shared.info("WindowsResizeManager stopped")
+        AppLogger.shared.info("WindowsResizeManager stopped.")
     }
 
     private func setupNotifications() {
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(dockPositionChanged),
-            name: NSNotification.Name("WinDockPositionChanged"),
-            object: nil
-        )
-        
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(userDefaultsChanged),
-            name: UserDefaults.didChangeNotification,
-            object: nil
-        )
-        
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(screenParametersChanged),
-            name: NSApplication.didChangeScreenParametersNotification,
-            object: nil
-        )
-        
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self,
-            selector: #selector(applicationLaunched),
-            name: NSWorkspace.didLaunchApplicationNotification,
-            object: nil
-        )
-        
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self,
-            selector: #selector(applicationTerminated),
-            name: NSWorkspace.didTerminateApplicationNotification,
-            object: nil
-        )
+        let notificationCenter = NotificationCenter.default
+        notificationCenter.addObserver(self, selector: #selector(dockSettingsChanged), name: NSNotification.Name("WinDockPositionChanged"), object: nil)
+        notificationCenter.addObserver(self, selector: #selector(screenParametersChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
-    
-    @objc private func dockPositionChanged() {
-        updateDockAreaFromSettings()
-        if isRunning {
-            checkAllVisibleWindows()
+
+    @objc private func dockSettingsChanged() {
+        let enableWindowsResize = UserDefaults.standard.bool(forKey: "enableWindowsResize")
+        let currentPosition = DockPosition(rawValue: UserDefaults.standard.string(forKey: "dockPosition") ?? "bottom") ?? .bottom
+        
+        // Only update if needed
+        let positionChanged = currentPosition != dockPosition
+        
+        if enableWindowsResize && !isRunning {
+            start()
+        } else if !enableWindowsResize && isRunning {
+            stop()
+        }
+        
+        if positionChanged || isRunning {
+            updateDockAreaFromSettings()
+            // Delay the check slightly to allow animations to complete
+            if isRunning {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    self?.checkAllWindows()
+                }
+            }
         }
     }
-    
-    @objc private func userDefaultsChanged() {
-        updateDockAreaFromSettings()
-        if isRunning {
-            checkAllVisibleWindows()
-        }
-    }
-    
+
     @objc private func screenParametersChanged() {
         updateDockAreaFromSettings()
         if isRunning {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                self.setupWindowMonitoring()
-                self.checkAllVisibleWindows()
+            // Allow time for screen changes to settle
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.checkAllWindows()
             }
         }
     }
-    
-    @objc private func applicationLaunched(_ notification: Notification) {
-        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.addObserverForApplication(app)
-        }
-    }
-    
-    @objc private func applicationTerminated(_ notification: Notification) {
-        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-        
-        removeObserverForApplication(app)
-    }
-    
+
     private func updateDockAreaFromSettings() {
-        let dockPositionStr = UserDefaults.standard.string(forKey: "dockPosition") ?? "bottom"
-        dockPosition = DockPosition(rawValue: dockPositionStr) ?? .bottom
-        
-        // Clear existing dock areas
+        let newDockPosition = DockPosition(rawValue: UserDefaults.standard.string(forKey: "dockPosition") ?? "bottom") ?? .bottom
+        let positionChanged = newDockPosition != dockPosition
+        dockPosition = newDockPosition
+
+        // Cache old areas to check if they actually changed
+        let oldAreas = dockAreas
         dockAreas.removeAll()
+
+        for (index, screen) in NSScreen.screens.enumerated() {
+            let newDockArea = dockFrame(for: dockPosition, screen: screen)
+            let oldDockArea = oldAreas[screen]
+            
+            dockAreas[screen] = newDockArea
+            
+            if oldDockArea != newDockArea {
+                AppLogger.shared.info("Screen \(index) dock area changed: \(String(describing: oldDockArea)) -> \(newDockArea)")
+            }
+        }
         
-        // Calculate dock area for each screen
-        for screen in NSScreen.screens {
-            let dockArea = dockFrame(for: dockPosition, screen: screen)
-            dockAreas[screen] = dockArea
-            AppLogger.shared.info("Updated dock area for screen \(screen.localizedName): \(dockArea) for position: \(dockPosition.rawValue)")
+        if positionChanged {
+            AppLogger.shared.info("Dock position changed to: \(dockPosition.rawValue) across \(NSScreen.screens.count) screens")
         }
     }
-    
+
     private func checkAccessibilityPermissions() -> Bool {
-        let isPermitted = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): false] as CFDictionary)
-        if !isPermitted {
-            AppLogger.shared.error("Accessibility permissions not granted for WindowsResizeManager")
-        }
-        return isPermitted
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): false] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
     }
-    
+
     private func requestAccessibilityPermissions() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
-        let isTrusted = AXIsProcessTrustedWithOptions(options)
-        
-        if !isTrusted {
-            DispatchQueue.main.async {
-                self.showAccessibilityAlert()
-            }
-        }
+        AXIsProcessTrustedWithOptions(options)
     }
-    
-    private func showAccessibilityAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Accessibility Permission Required"
-        alert.informativeText = "WinDock needs accessibility permissions to resize windows and prevent them from overlapping the dock area. Please enable accessibility access in System Settings > Privacy & Security > Accessibility."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Cancel")
-        
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                NSWorkspace.shared.open(url)
-            }
-        }
-        
-        AppLogger.shared.error("Accessibility permissions alert shown to user")
-    }
-    
-    private func setupWindowMonitoring() {
-        cleanupObservers()
-        
-        let runningApps = NSWorkspace.shared.runningApplications.filter { app in
-            app.activationPolicy == .regular && app.bundleIdentifier != nil
-        }
-        
-        for app in runningApps {
-            addObserverForApplication(app)
-        }
-        
-        AppLogger.shared.info("Set up window monitoring for \(runningApps.count) applications")
-    }
-    
-    private func addObserverForApplication(_ app: NSRunningApplication) {
-        guard app.bundleIdentifier?.contains("WinDock") != true else { return }
-        guard app.activationPolicy == .regular else { return }
-        
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        var observer: AXObserver?
-        
-        let result = AXObserverCreate(app.processIdentifier, axObserverCallback, &observer)
-        guard result == .success, let observer = observer else {
-            AppLogger.shared.error("Failed to create AX observer for app: \(app.bundleIdentifier ?? "unknown")")
-            return
-        }
-        
-        let notifications = [
-            kAXMovedNotification,
-            kAXResizedNotification,
-            kAXWindowMiniaturizedNotification,
-            kAXWindowDeminiaturizedNotification,
-            kAXApplicationActivatedNotification,
-            kAXWindowCreatedNotification
-        ]
-        
-        for notification in notifications {
-            let addResult = AXObserverAddNotification(observer, appElement, notification as CFString, nil)
-            if addResult != .success {
-                AppLogger.shared.error("Failed to add AX notification \(notification) for app \(app.bundleIdentifier ?? "unknown")")
-            }
-        }
-        
-        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
-        
-        observers.append(observer)
-        observerInfos.append((observer: observer, app: app, element: appElement))
-        
-        AppLogger.shared.info("Added AX observer for app: \(app.bundleIdentifier ?? "unknown")")
-    }
-    
-    private func removeObserverForApplication(_ app: NSRunningApplication) {
-        observerInfos.removeAll { info in
-            if info.app.processIdentifier == app.processIdentifier {
-                let observer = info.observer
-                CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
-                
-                if let index = observers.firstIndex(of: observer) {
-                    observers.remove(at: index)
-                }
-                
-                AppLogger.shared.info("Removed AX observer for app: \(app.bundleIdentifier ?? "unknown")")
-                return true
-            }
-            return false
-        }
-    }
-    
-    private func cleanupObservers() {
-        for observer in observers {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
-        }
-        observers.removeAll()
-        observerInfos.removeAll()
-        
-        AppLogger.shared.info("Cleaned up all AX observers")
-    }
-    
+
     private func startPeriodicMonitoring() {
         monitoringTimer?.invalidate()
-        
-        // Use a longer interval (5 seconds) to prevent frequent checks
-        monitoringTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            self?.cleanupOldAdjustmentRecords()
-            self?.checkAllVisibleWindows()
-        }
-    }
-    
-    private func cleanupOldAdjustmentRecords() {
-        let cutoffTime = Date().addingTimeInterval(-30.0) // Remove records older than 30 seconds
-        lastAdjustmentTime = lastAdjustmentTime.filter { _, date in
-            date > cutoffTime
-        }
-    }
-    
-    func checkAllVisibleWindows() {
-        guard isRunning else { return }
-        
-        // Check if any dock areas are defined
-        if dockAreas.isEmpty {
-            updateDockAreaFromSettings()
-            // If still empty, nothing to do
-            if dockAreas.isEmpty {
-                return
+        // Check more frequently (2 seconds) but with rate limiting in checkAllWindows
+        monitoringTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.checkAllWindows()
             }
         }
+        monitoringTimer?.tolerance = 0.2 // Allow some timing flexibility for better power efficiency
         
-        let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
-        
-        guard let windows = windowList else {
-            AppLogger.shared.error("Failed to get window list for overlap checking")
+        // Do an initial check
+        DispatchQueue.main.async { [weak self] in
+            self?.checkAllWindows()
+        }
+    }
+
+    func checkAllWindows() {
+        guard isRunning, !dockAreas.isEmpty else {
+            AppLogger.shared.warning("WindowsResizeManager is not running or dock areas are empty.")
             return
         }
-        
-        var adjustedCount = 0
-        
-        // Create a set to track apps we've already checked, to avoid duplicate work
-        var processedPIDs = Set<pid_t>()
-        
-        for windowInfo in windows {
-            // Skip if window has no bounds or layer is below threshold (likely invisible or background window)
-            guard let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
-                  let bounds = windowInfo[kCGWindowBounds as String] as? [String: Any],
-                  let x = bounds["X"] as? CGFloat,
-                  let y = bounds["Y"] as? CGFloat,
-                  let width = bounds["Width"] as? CGFloat,
-                  let height = bounds["Height"] as? CGFloat,
-                  let windowNumber = windowInfo[kCGWindowNumber as String] as? CGWindowID,
-                  let layer = windowInfo[kCGWindowLayer as String] as? Int,
-                  layer < 100 else { continue } // Skip high-layer windows (menu, helper, etc)
-            
-            // Skip windows that are too small (likely utility windows, tooltips, etc)
-            if width < 100 || height < 100 { continue }
-            
-            // Get window app
-            guard let app = NSRunningApplication(processIdentifier: pid) else { continue }
-            
-            // Skip our own app and non-regular apps
-            if let bundleId = app.bundleIdentifier, 
-               bundleId.contains("WinDock") || app.activationPolicy != .regular {
-                continue
-            }
-            
-            // Skip recently adjusted windows
-            if let lastAdjusted = lastAdjustmentTime[windowNumber],
-               Date().timeIntervalSince(lastAdjusted) < 5.0 {
-                continue
-            }
-            
-            // Create window rect
-            let windowRect = CGRect(x: x, y: y, width: width, height: height)
-            
-            // Find overlapping dock area
-            var overlappingDockArea: CGRect?
-            var overlappingScreen: NSScreen?
-            
-            for (screen, dockArea) in dockAreas {
-                if windowRect.intersects(dockArea) {
-                    overlappingDockArea = dockArea
-                    overlappingScreen = screen
-                    break
-                }
-            }
-            
-            // Adjust window if it overlaps with dock
-            if let dockArea = overlappingDockArea, let screen = overlappingScreen {
-                if adjustWindowForDockOverlap(windowRect: windowRect, windowNumber: windowNumber, pid: pid, dockArea: dockArea, screen: screen) {
-                    adjustedCount += 1
-                    
-                    // Limit adjustments per check to avoid heavy processing
-                    if adjustedCount >= 3 {
-                        break
-                    }
-                }
-            }
+
+        // Rate limiting: check if enough time has passed since last update
+        let currentTime = ProcessInfo.processInfo.systemUptime
+        if currentTime - lastUpdateTime < minimumUpdateInterval {
+            return
         }
-        
-        if adjustedCount > 0 {
-            AppLogger.shared.info("Adjusted \(adjustedCount) windows to avoid dock overlap")
+        lastUpdateTime = currentTime
+
+        let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        guard let windows = windowList else {
+            AppLogger.shared.error("Failed to retrieve window list.")
+            return
+        }
+
+        AppLogger.shared.info("Checking all windows. Total windows: \(windows.count), Screens: \(NSScreen.screens.count)")
+
+        for windowInfo in windows {
+            guard let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+                  let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
+                  let windowFrame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+                  let app = NSRunningApplication(processIdentifier: pid),
+                  let layer = windowInfo[kCGWindowLayer as String] as? Int,
+                  app.activationPolicy == .regular,
+                  app.bundleIdentifier != Bundle.main.bundleIdentifier,
+                  layer == 0 // Only handle normal windows, not utility windows or others
+            else {
+                continue
+            }
+
+            // Skip windows that are likely system UI elements or too small
+            let isOnScreen = windowInfo[kCGWindowIsOnscreen as String] as? Bool ?? false
+            let alpha = windowInfo[kCGWindowAlpha as String] as? CGFloat ?? 1.0
+            if !isOnScreen || alpha < 0.1 || windowFrame.width < 50 || windowFrame.height < 50 {
+                continue
+            }
+
+            // Find the screen this window is primarily on
+            let windowScreen = NSScreen.screens.first { screen in
+                let intersection = screen.frame.intersection(windowFrame)
+                return !intersection.isNull && (intersection.width * intersection.height) > (windowFrame.width * windowFrame.height * 0.5)
+            } ?? NSScreen.main
+
+            if let screen = windowScreen,
+               let dockArea = dockAreas[screen],
+               windowFrame.intersects(dockArea) {
+                AppLogger.shared.info("Window overlaps with dock area on screen \(NSScreen.screens.firstIndex(of: screen) ?? -1). Window: \(windowFrame), Dock area: \(dockArea)")
+                adjust(windowFrame: windowFrame, overlapping: dockArea, on: screen, for: app)
+            }
         }
     }
-    
-    private func adjustWindowForDockOverlap(windowRect: CGRect, windowNumber: CGWindowID, pid: pid_t, dockArea: CGRect, screen: NSScreen) -> Bool {
+
+    private func adjust(windowFrame: CGRect, overlapping dockArea: CGRect, on screen: NSScreen, for targetApp: NSRunningApplication) {
+        var newFrame = windowFrame
         let screenFrame = screen.frame
-        var adjustedRect = windowRect
-        let margin: CGFloat = 10.0 // Small margin to ensure windows don't touch the dock
+        let visibleFrame = screen.visibleFrame
+        let margin: CGFloat = 4
         
-        // Check if this window was recently adjusted (within 5 seconds)
-        if let lastAdjusted = lastAdjustmentTime[windowNumber], 
-           Date().timeIntervalSince(lastAdjusted) < 5.0 {
-            // Skip windows that were very recently adjusted to break potential loops
-            return false
-        }
-        
-        // Calculate significant overlap threshold - only adjust if overlap is meaningful
-        let significantOverlapThreshold: CGFloat = 20.0
-        var hasSignificantOverlap = false
-        var overlapArea: CGFloat = 0
-        
-        // Calculate the intersection area to determine overlap severity
-        let intersection = windowRect.intersection(dockArea)
-        if !intersection.isEmpty {
-            overlapArea = intersection.width * intersection.height
-            hasSignificantOverlap = (overlapArea > significantOverlapThreshold)
-            
-            // Only log if there's meaningful overlap
-            if hasSignificantOverlap {
-                AppLogger.shared.info("Window overlap with dock: \(overlapArea) points² - Window: \(windowRect), Dock: \(dockArea)")
-            }
-        }
-        
-        // Only proceed if there's significant overlap
-        guard hasSignificantOverlap else {
-            return false
-        }
-        
-        // Calculate dock boundaries and adjust windows
-        // Minimum allowed dimensions for windows after resizing
-        let minWindowWidth: CGFloat = 400
-        let minWindowHeight: CGFloat = 300
-        
+        // Calculate the optimal position based on dock position and overlap
         switch dockPosition {
         case .bottom:
-            // For bottom dock: Try to move window up, resize if needed
-            let maxY = dockArea.minY - margin
-            if adjustedRect.maxY > maxY {
-                // Calculate available height above dock
-                let availableHeight = maxY - screenFrame.minY
-                
-                if adjustedRect.height <= availableHeight || availableHeight >= minWindowHeight {
-                    // Enough space to move the window above the dock
-                    let newY = maxY - adjustedRect.height
-                    adjustedRect.origin.y = max(newY, screenFrame.minY)
-                } else {
-                    // Not enough space above dock, resize the window to fit
-                    adjustedRect.size.height = max(availableHeight, minWindowHeight)
-                    adjustedRect.origin.y = screenFrame.minY
-                }
+            // If window is mostly below dock area, move it up
+            if windowFrame.maxY > dockArea.maxY && windowFrame.minY >= dockArea.minY {
+                newFrame.origin.y = dockArea.maxY + margin
+            }
+            // If window extends below dock area, adjust height
+            else if windowFrame.maxY > dockArea.minY {
+                newFrame.size.height = min(windowFrame.height, dockArea.minY - windowFrame.minY - margin)
             }
         case .top:
-            // For top dock: Try to move window down, resize if needed
-            let minY = dockArea.maxY + margin
-            if adjustedRect.minY < minY {
-                // Calculate available height below dock
-                let availableHeight = screenFrame.maxY - minY
-                
-                if adjustedRect.height <= availableHeight || availableHeight >= minWindowHeight {
-                    // Enough space to move the window below the dock
-                    adjustedRect.origin.y = minY
-                } else {
-                    // Not enough space below dock, resize the window to fit
-                    adjustedRect.size.height = max(availableHeight, minWindowHeight)
-                    adjustedRect.origin.y = minY
-                }
+            // If window is mostly above dock area, move it down
+            if windowFrame.minY < dockArea.minY && windowFrame.maxY <= dockArea.maxY {
+                newFrame.origin.y = dockArea.minY - newFrame.height - margin
+            }
+            // If window extends above dock area, adjust height
+            else if windowFrame.minY < dockArea.maxY {
+                let newHeight = min(windowFrame.height, screenFrame.maxY - dockArea.maxY - margin)
+                newFrame.origin.y = dockArea.maxY + margin
+                newFrame.size.height = newHeight
             }
         case .left:
-            // For left dock: Try to move window right, resize if needed
-            let minX = dockArea.maxX + margin
-            if adjustedRect.minX < minX {
-                // Calculate available width to the right of dock
-                let availableWidth = screenFrame.maxX - minX
-                
-                if adjustedRect.width <= availableWidth || availableWidth >= minWindowWidth {
-                    // Enough space to move the window to the right of the dock
-                    adjustedRect.origin.x = minX
-                } else {
-                    // Not enough space to the right, resize the window to fit
-                    adjustedRect.size.width = max(availableWidth, minWindowWidth)
-                    adjustedRect.origin.x = minX
-                }
+            // If window is mostly to the left of dock area, move it right
+            if windowFrame.maxX > dockArea.maxX && windowFrame.minX >= dockArea.minX {
+                newFrame.origin.x = dockArea.maxX + margin
+            }
+            // If window extends into left dock area, adjust width
+            else if windowFrame.maxX > dockArea.minX {
+                newFrame.size.width = min(windowFrame.width, dockArea.minX - windowFrame.minX - margin)
             }
         case .right:
-            // For right dock: Try to move window left, resize if needed
-            let maxX = dockArea.minX - margin
-            if adjustedRect.maxX > maxX {
-                // Calculate available width to the left of dock
-                let availableWidth = maxX - screenFrame.minX
-                
-                if adjustedRect.width <= availableWidth || availableWidth >= minWindowWidth {
-                    // Enough space to move the window to the left of the dock
-                    let newX = maxX - adjustedRect.width
-                    adjustedRect.origin.x = max(newX, screenFrame.minX)
-                } else {
-                    // Not enough space to the left, resize the window to fit
-                    adjustedRect.size.width = max(availableWidth, minWindowWidth)
-                    adjustedRect.origin.x = screenFrame.minX
-                }
+            // If window is mostly to the right of dock area, move it left
+            if windowFrame.minX < dockArea.minX && windowFrame.maxX <= dockArea.maxX {
+                newFrame.origin.x = dockArea.minX - newFrame.width - margin
+            }
+            // If window extends into right dock area, adjust width
+            else if windowFrame.minX < dockArea.maxX {
+                let newWidth = min(windowFrame.width, screenFrame.maxX - dockArea.maxX - margin)
+                newFrame.origin.x = dockArea.maxX + margin
+                newFrame.size.width = newWidth
             }
         }
-        
-        // Ensure the window stays within screen bounds
-        if adjustedRect.maxX > screenFrame.maxX {
-            adjustedRect.origin.x = screenFrame.maxX - adjustedRect.width
-        }
-        if adjustedRect.maxY > screenFrame.maxY {
-            adjustedRect.origin.y = screenFrame.maxY - adjustedRect.height
-        }
-        if adjustedRect.minX < screenFrame.minX {
-            adjustedRect.origin.x = screenFrame.minX
-        }
-        if adjustedRect.minY < screenFrame.minY {
-            adjustedRect.origin.y = screenFrame.minY
-        }
-        
-        // Check for meaningful changes in position or size (at least 5 pixels)
-        let minMeaningfulChange: CGFloat = 5.0
-        let positionChanged = abs(adjustedRect.origin.x - windowRect.origin.x) >= minMeaningfulChange ||
-                              abs(adjustedRect.origin.y - windowRect.origin.y) >= minMeaningfulChange
-        let sizeChanged = abs(adjustedRect.width - windowRect.width) >= minMeaningfulChange ||
-                          abs(adjustedRect.height - windowRect.height) >= minMeaningfulChange
-        
-        if !positionChanged && !sizeChanged {
-            return false
-        }
-        
-        // Record the attempted adjustment before trying to actually apply it
-        lastAdjustmentTime[windowNumber] = Date()
-        
-        // Try to adjust window using Accessibility API
-        let app = NSRunningApplication(processIdentifier: pid)
-        let appElement = AXUIElementCreateApplication(pid)
-        
-        var windowListRef: CFTypeRef?
-        let getWindowsResult = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowListRef)
-        
-        guard getWindowsResult == .success,
-              let windowList = windowListRef as? [AXUIElement] else {
-            AppLogger.shared.error("Failed to get windows for app PID: \(pid)")
-            return false
-        }
-        
-        // Find the matching window by comparing positions (approximate)
-        for window in windowList {
-            var positionRef: CFTypeRef?
-            var sizeRef: CFTypeRef?
-            
-            if AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionRef) == .success,
-               AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef) == .success,
-               let positionValue = positionRef,
-               let sizeValue = sizeRef,
-               CFGetTypeID(positionValue) == AXValueGetTypeID(),
-               CFGetTypeID(sizeValue) == AXValueGetTypeID() {
-                
-                var currentPosition = CGPoint.zero
-                var currentSize = CGSize.zero
-                
-                if AXValueGetValue(positionValue as! AXValue, .cgPoint, &currentPosition) &&
-                   AXValueGetValue(sizeValue as! AXValue, .cgSize, &currentSize) {
-                    
-                    let currentRect = CGRect(origin: currentPosition, size: currentSize)
-                    
-                    // Check if this is approximately the same window (within 15 pixels)
-                    // Using a relaxed match to ensure we find the right window
-                    if abs(currentRect.origin.x - windowRect.origin.x) < 15.0 &&
-                       abs(currentRect.origin.y - windowRect.origin.y) < 15.0 &&
-                       abs(currentRect.width - windowRect.width) < 15.0 &&
-                       abs(currentRect.height - windowRect.height) < 15.0 {
-                        
-                        // Get the app name for better logging
-                        let appName = app?.localizedName ?? "unknown app"
-                        let bundleId = app?.bundleIdentifier ?? "unknown"
-                        
-                        // Prepare position and size values
-                        let newPosition = AXValue.from(value: adjustedRect.origin, type: .cgPoint)
-                        let newSize = AXValue.from(value: adjustedRect.size, type: .cgSize)
-                        
-                        var positionChanged = false
-                        var sizeChanged = false
-                        
-                        // Apply position changes if needed
-                        if abs(adjustedRect.origin.x - currentRect.origin.x) >= 1.0 || 
-                           abs(adjustedRect.origin.y - currentRect.origin.y) >= 1.0 {
-                            
-                            let positionResult = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, newPosition)
-                            if positionResult == .success {
-                                positionChanged = true
-                            } else {
-                                AppLogger.shared.error("Failed to move \(appName) window (\(bundleId)), error: \(positionResult.rawValue)")
-                            }
-                        }
-                        
-                        // Apply size changes if needed
-                        if abs(adjustedRect.width - currentRect.width) >= 1.0 || 
-                           abs(adjustedRect.height - currentRect.height) >= 1.0 {
-                            
-                            let sizeResult = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, newSize)
-                            if sizeResult == .success {
-                                sizeChanged = true
-                            } else {
-                                AppLogger.shared.error("Failed to resize \(appName) window (\(bundleId)), error: \(sizeResult.rawValue)")
-                            }
-                        }
-                        
-                        // Log the changes
-                        if positionChanged && sizeChanged {
-                            AppLogger.shared.info("Successfully moved and resized \(appName) window from \(windowRect) to \(adjustedRect) to avoid dock overlap")
-                            return true
-                        } else if positionChanged {
-                            AppLogger.shared.info("Successfully moved \(appName) window from \(windowRect.origin) to \(adjustedRect.origin) to avoid dock overlap")
-                            return true
-                        } else if sizeChanged {
-                            AppLogger.shared.info("Successfully resized \(appName) window from \(windowRect.size) to \(adjustedRect.size) to avoid dock overlap")
-                            return true
-                        }
-                        break
-                    }
-                }
-            }
-        }
-        
-        return false
-    }
-}
 
-private func axObserverCallback(
-    observer: AXObserver,
-    element: AXUIElement,
-    notification: CFString,
-    userData: UnsafeMutableRawPointer?
-) {
-    // Handle window movement and resize events
-    let notificationName = notification as String
-    
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-        // Give the window a moment to settle before checking
-        WindowsResizeManager.shared.checkAllVisibleWindows()
+        // Ensure the window remains within visible screen bounds
+        newFrame.origin.x = max(visibleFrame.minX, min(newFrame.origin.x, visibleFrame.maxX - newFrame.width))
+        newFrame.origin.y = max(visibleFrame.minY, min(newFrame.origin.y, visibleFrame.maxY - newFrame.height))
+        
+        // Ensure minimum window size
+        newFrame.size.width = max(newFrame.width, 100)
+        newFrame.size.height = max(newFrame.height, 100)
+
+        // Check if adjustment is actually needed (avoid unnecessary moves)
+        let deltaX = abs(newFrame.origin.x - windowFrame.origin.x)
+        let deltaY = abs(newFrame.origin.y - windowFrame.origin.y)
+        let deltaW = abs(newFrame.width - windowFrame.width)
+        let deltaH = abs(newFrame.height - windowFrame.height)
+        
+        if deltaX < 1 && deltaY < 1 && deltaW < 1 && deltaH < 1 {
+            AppLogger.shared.info("No adjustment needed for window at \(windowFrame.origin) - already positioned correctly")
+            return
+        }
+
+        AppLogger.shared.info("Adjusting window for app: \(targetApp.localizedName ?? "Unknown") from \(windowFrame) to \(newFrame)")
+
+        // Use Accessibility API to adjust the window
+        let appElement = AXUIElementCreateApplication(targetApp.processIdentifier)
+        var windowsRef: CFTypeRef?
+        
+        guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let axWindows = windowsRef as? [AXUIElement] else {
+            AppLogger.shared.error("Failed to retrieve windows for app: \(targetApp.localizedName ?? "Unknown")")
+            return
+        }
+
+        for axWindow in axWindows {
+            var position = CGPoint.zero
+            var size = CGSize.zero
+
+            guard let positionValue = getAXAttribute(for: axWindow, attribute: kAXPositionAttribute as String),
+                  let sizeValue = getAXAttribute(for: axWindow, attribute: kAXSizeAttribute as String),
+                  AXValueGetValue(positionValue, .cgPoint, &position),
+                  AXValueGetValue(sizeValue, .cgSize, &size) else { continue }
+
+            let currentFrame = CGRect(origin: position, size: size)
+            
+            // Check if this window matches the one we want to adjust (with some tolerance)
+            if abs(currentFrame.origin.x - windowFrame.origin.x) < 5 && 
+               abs(currentFrame.origin.y - windowFrame.origin.y) < 5 &&
+               abs(currentFrame.width - windowFrame.width) < 5 &&
+               abs(currentFrame.height - windowFrame.height) < 5 {
+                
+                // Set new position and size in a single transaction if possible
+                if let newPositionValue = AXValue.from(value: newFrame.origin, type: .cgPoint),
+                   let newSizeValue = AXValue.from(value: newFrame.size, type: .cgSize) {
+                    
+                    let posResult = AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, newPositionValue)
+                    let sizeResult = AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, newSizeValue)
+                    
+                    if posResult == .success && sizeResult == .success {
+                        AppLogger.shared.info("Successfully adjusted window from \(currentFrame) to: \(newFrame) for app: \(targetApp.localizedName ?? "Unknown")")
+                    } else {
+                        AppLogger.shared.error("Failed to adjust window. Position result: \(posResult), Size result: \(sizeResult)")
+                    }
+                } else {
+                    AppLogger.shared.error("Failed to create AXValues for new position/size")
+                }
+                return // Found and adjusted the matching window
+            }
+        }
+        
+        AppLogger.shared.warning("Could not find matching window to adjust for frame: \(windowFrame) in app: \(targetApp.localizedName ?? "Unknown")")
     }
-    
-    AppLogger.shared.info("Window event detected: \(notificationName)")
+
+    private func getAXAttribute(for element: AXUIElement, attribute: String) -> AXValue? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
+            return nil
+        }
+        return value as! AXValue?
+    }
 }
 
 extension AXValue {
-    static func from(value: CGPoint, type: AXValueType) -> AXValue {
+    static func from(value: CGPoint, type: AXValueType) -> AXValue? {
         var point = value
-        return AXValueCreate(type, &point)!
+        return AXValueCreate(type, &point)
     }
     
-    static func from(value: CGSize, type: AXValueType) -> AXValue {
+    static func from(value: CGSize, type: AXValueType) -> AXValue? {
         var size = value
-        return AXValueCreate(type, &size)!
+        return AXValueCreate(type, &size)
     }
 }
+

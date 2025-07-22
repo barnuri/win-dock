@@ -56,6 +56,9 @@ class DockWindow: NSPanel {
         // Set a proper window title for app switcher
         self.title = "WinDock Taskbar"
 
+        // Set initial alpha value based on auto-hide setting
+        alphaValue = autoHide ? 0.0 : 1.0
+        
         updatePosition()
         appManager.startMonitoring()
 
@@ -74,6 +77,7 @@ class DockWindow: NSPanel {
             guard let self = self else { return }
             self.updatePosition()
             self.updateDockView()
+            self.handleAutoHideSettingChange()
         }
 
         setupDockView()
@@ -96,6 +100,17 @@ class DockWindow: NSPanel {
         guard let hostingView = dockView else { return }
         hostingView.rootView = DockView()
         setupTrackingArea()
+    }
+    
+    private func handleAutoHideSettingChange() {
+        // If auto-hide is off, ensure the dock is fully visible
+        if !autoHide && alphaValue < 1.0 {
+            hideTimer?.invalidate()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.2
+                animator().alphaValue = 1.0
+            }
+        }
     }
     
     private func setupTrackingArea() {

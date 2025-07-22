@@ -25,7 +25,14 @@ private func setGlobalErrorHandlers() {
 @main
 struct WinDockApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
+
+    init() {
+        // Start the WindowsResizeManager only if enabled in settings
+        if UserDefaults.standard.bool(forKey: "enableWindowsResize") {
+            WindowsResizeManager.shared.start()
+        }
+    }
+
     var body: some Scene {
         WindowGroup("WinDock") {
             // Main content view with minimal size to ensure app is visible in dock
@@ -33,7 +40,7 @@ struct WinDockApp: App {
                 Color.clear
                     .frame(width: 1, height: 1)
                     .opacity(0.01) // Very slight opacity to keep window registered
-                
+
                 // Hidden helper for SettingsAccess
                 SettingsAccessHelper()
             }
@@ -41,7 +48,7 @@ struct WinDockApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
-        
+
         // Settings scene - this integrates with standard Command+, shortcut
         Settings {
             SettingsView()
@@ -56,10 +63,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var isUpdatingDockWindows = false
     private var lastDockPosition: DockPosition = .bottom
     private var lastDockSize: String = "medium"
-    private var lastPaddingTop: Double = 0.0
-    private var lastPaddingBottom: Double = 0.0
-    private var lastPaddingLeft: Double = 0.0
-    private var lastPaddingRight: Double = 0.0
+    private var lastPaddingVertical: Double = 0.0
+    private var lastPaddingHorizontal: Double = 0.0
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         setGlobalErrorHandlers()
@@ -67,10 +72,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Initialize tracking variables
         lastDockPosition = dockPosition
         lastDockSize = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
-        lastPaddingTop = UserDefaults.standard.double(forKey: "paddingTop")
-        lastPaddingBottom = UserDefaults.standard.double(forKey: "paddingBottom")
-        lastPaddingLeft = UserDefaults.standard.double(forKey: "paddingLeft")
-        lastPaddingRight = UserDefaults.standard.double(forKey: "paddingRight")
+        lastPaddingVertical = UserDefaults.standard.double(forKey: "paddingVertical")
+        lastPaddingHorizontal = UserDefaults.standard.double(forKey: "paddingHorizontal")
         
         // Ensure the app shows up in the dock (counteract LSUIElement if needed)
         ensureAppVisibility()
@@ -82,8 +85,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusBarItem()
         setupDockWindowsForAllScreens()
         
-        // Start WindowsResizeManager
-        // WindowsResizeManager.shared.start() # not ready
+        // Start WindowsResizeManager if enabled in settings
+        if UserDefaults.standard.bool(forKey: "enableWindowsResize") {
+            WindowsResizeManager.shared.start()
+        }
         
         // Ensure app is properly activated
         NSApp.activate(ignoringOtherApps: true)
@@ -440,24 +445,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func userDefaultsDidChange() {
         // Only update if dock-related settings have changed
         let currentDockSize = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
-        let currentPaddingTop = UserDefaults.standard.double(forKey: "paddingTop")
-        let currentPaddingBottom = UserDefaults.standard.double(forKey: "paddingBottom")
-        let currentPaddingLeft = UserDefaults.standard.double(forKey: "paddingLeft")
-        let currentPaddingRight = UserDefaults.standard.double(forKey: "paddingRight")
+        let currentPaddingVertical = UserDefaults.standard.double(forKey: "paddingVertical")
+        let currentPaddingHorizontal = UserDefaults.standard.double(forKey: "paddingHorizontal")
         
         if dockPosition != lastDockPosition || 
            currentDockSize != lastDockSize ||
-           currentPaddingTop != lastPaddingTop ||
-           currentPaddingBottom != lastPaddingBottom ||
-           currentPaddingLeft != lastPaddingLeft ||
-           currentPaddingRight != lastPaddingRight {
+           currentPaddingVertical != lastPaddingVertical ||
+           currentPaddingHorizontal != lastPaddingHorizontal {
             
             lastDockPosition = dockPosition
             lastDockSize = currentDockSize
-            lastPaddingTop = currentPaddingTop
-            lastPaddingBottom = currentPaddingBottom
-            lastPaddingLeft = currentPaddingLeft
-            lastPaddingRight = currentPaddingRight
+            lastPaddingVertical = currentPaddingVertical
+            lastPaddingHorizontal = currentPaddingHorizontal
             
             DispatchQueue.main.async {
                 self.setupDockWindowsForAllScreens()
