@@ -29,3 +29,4 @@ logs
 WinDock/WinDockApp.swift
 *.zip
 *.xcbkptlist
+WinDock.xcodeproj/xcuserdata
