@@ -103,24 +103,12 @@ class AppManager: ObservableObject {
             name: NSWorkspace.didTerminateApplicationNotification,
             object: nil
         )
-        
-        // Listen for window changes
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self,
-            selector: #selector(activeSpaceDidChange),
-            name: NSWorkspace.activeSpaceDidChangeNotification,
-            object: nil
-        )
-        
-        // Register screen insets for the dock
-        registerDockInsets()
     }
     
     func stopMonitoring() {
         appMonitorTimer?.invalidate()
         appMonitorTimer = nil
         NSWorkspace.shared.notificationCenter.removeObserver(self)
-        unregisterDockInsets()
     }
     
     @objc private func appDidLaunch(_ notification: Notification) {
@@ -134,13 +122,7 @@ class AppManager: ObservableObject {
             updateDockApps()
         }
     }
-    
-    @objc private func activeSpaceDidChange(_ notification: Notification) {
-        Task { @MainActor in
-            updateDockApps()
-        }
-    }
-    
+       
     // Public function to trigger update from outside
     func updateDockAppsIfNeeded() {
         Task { @MainActor in
@@ -543,206 +525,6 @@ class AppManager: ObservableObject {
         UserDefaults.standard.set(Array(pinnedBundleIdentifiers), forKey: pinnedAppsKey)
     }
     
-    // MARK: - Screen Insets for Dock
-    
-    private func registerDockInsets() {
-        // Register the dock area with the system to prevent maximized windows from overlapping
-        AppLogger.shared.info("Registering dock insets")
-        
-        // Get dock position and size from UserDefaults
-        guard let appDelegate = NSApp.delegate as? AppDelegate else { return }
-        let dockPosition = appDelegate.dockPosition
-        let dockHeight = getDockHeight()
-        
-        // Reserve screen space for each screen
-        for screen in NSScreen.screens {
-            reserveScreenSpace(for: screen, position: dockPosition, size: dockHeight)
-        }
-    }
-    
-    private func unregisterDockInsets() {
-        AppLogger.shared.info("Unregistering dock insets")
-        
-        // Remove screen space reservation for each screen
-        for screen in NSScreen.screens {
-            removeScreenSpaceReservation(for: screen)
-        }
-    }
-    
-    private func getDockHeight() -> CGFloat {
-        let dockSize = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
-        switch dockSize {
-        case "small": return 48
-        case "medium": return 56
-        case "large": return 64
-        default: return 56
-        }
-    }
-    
-    private func reserveScreenSpace(for screen: NSScreen, position: DockPosition, size: CGFloat) {
-        // This uses private APIs to reserve screen space
-        // In a production app, you might need to use a different approach
-        
-        let screenFrame = screen.frame
-        var reservedArea = CGRect.zero
-        
-        switch position {
-        case .bottom:
-            reservedArea = CGRect(
-                x: screenFrame.minX,
-                y: screenFrame.minY,
-                width: screenFrame.width,
-                height: size
-            )
-        case .top:
-            reservedArea = CGRect(
-                x: screenFrame.minX,
-                y: screenFrame.maxY - size,
-                width: screenFrame.width,
-                height: size
-            )
-        case .left:
-            reservedArea = CGRect(
-                x: screenFrame.minX,
-                y: screenFrame.minY,
-                width: size,
-                height: screenFrame.height
-            )
-        case .right:
-            reservedArea = CGRect(
-                x: screenFrame.maxX - size,
-                y: screenFrame.minY,
-                width: size,
-                height: screenFrame.height
-            )
-        }
-        
-        // Store the reserved area for later removal
-        let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? 0
-        UserDefaults.standard.set(NSStringFromRect(reservedArea), forKey: "WinDock.ReservedArea.\(screenNumber)")
-        
-        // Update window manager integration
-        WindowManagerIntegration.shared.updateReservation(displayID: screenNumber, area: reservedArea, position: position)
-        
-        // Notify system about screen space reservation using multiple methods
-        notifyScreenSpaceReservation(screen: screen, reservedArea: reservedArea, position: position)
-        
-        // This is a simplified version - actual implementation would use CGSSetScreenResolution or similar
-        AppLogger.shared.info("Reserved screen area: \(reservedArea) for screen: \(screen.localizedName)")
-    }
-    
-    private func notifyScreenSpaceReservation(screen: NSScreen, reservedArea: CGRect, position: DockPosition) {
-        // Method 1: Use NSScreen's private APIs if available
-        if let screenDict = screen.deviceDescription as NSDictionary?,
-           let screenNumber = screenDict["NSScreenNumber"] as? CGDirectDisplayID {
-            
-            // Update window manager integration
-            WindowManagerIntegration.shared.updateReservation(
-                displayID: screenNumber,
-                area: reservedArea,
-                position: position
-            )
-            
-            let userInfo: [String: Any] = [
-                "screen": screen,
-                "reservedArea": reservedArea,
-                "position": position.rawValue,
-                "screenNumber": screenNumber
-            ]
-            
-            NotificationCenter.default.post(
-                name: NSNotification.Name("WinDockScreenReservationChanged"),
-                object: self,
-                userInfo: userInfo
-            )
-        }
-        
-        // Method 2: Update system accessibility settings
-        updateAccessibilityScreenSettings(for: screen, reservedArea: reservedArea, position: position)
-        
-        // Method 3: Integrate with window management utilities
-        integrateWithWindowManagers(reservedArea: reservedArea, position: position)
-    }
-    
-    private func updateAccessibilityScreenSettings(for screen: NSScreen, reservedArea: CGRect, position: DockPosition) {
-        // Set up accessibility bounds that window managers can respect
-        let prefsDict: [String: Any] = [
-            "WinDockPosition": position.rawValue,
-            "WinDockSize": reservedArea,
-            "WinDockActive": true,
-            "LastUpdate": Date().timeIntervalSince1970
-        ]
-        
-        // Store in a location that window managers can access
-        let globalDefaults = UserDefaults(suiteName: "com.windock.global") ?? UserDefaults.standard
-        globalDefaults.set(prefsDict, forKey: "WinDockReservation")
-    }
-    
-    private func integrateWithWindowManagers(reservedArea: CGRect, position: DockPosition) {
-        // Create a file that window managers like Rectangle, Magnet, etc. can read
-        let dockInfoURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("WinDock")
-            .appendingPathComponent("dock-info.json")
-        
-        if let dockInfoURL = dockInfoURL {
-            do {
-                try FileManager.default.createDirectory(at: dockInfoURL.deletingLastPathComponent(), 
-                                                      withIntermediateDirectories: true)
-                
-                let dockInfo = [
-                    "position": position.rawValue,
-                    "reservedArea": [
-                        "x": reservedArea.origin.x,
-                        "y": reservedArea.origin.y,
-                        "width": reservedArea.size.width,
-                        "height": reservedArea.size.height
-                    ],
-                    "active": true,
-                    "version": "1.0"
-                ] as [String: Any]
-                
-                let jsonData = try JSONSerialization.data(withJSONObject: dockInfo, options: .prettyPrinted)
-                try jsonData.write(to: dockInfoURL)
-                
-                AppLogger.shared.info("Created dock info file at: \(dockInfoURL.path)")
-            } catch {
-                AppLogger.shared.error("Failed to create dock info file", error: error)
-            }
-        }
-    }
-    
-    private func removeScreenSpaceReservation(for screen: NSScreen) {
-        // Remove the previously reserved screen space
-        let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? 0
-        let key = "WinDock.ReservedArea.\(screenNumber)"
-        UserDefaults.standard.removeObject(forKey: key)
-        
-        // Update window manager integration
-        WindowManagerIntegration.shared.removeReservation(displayID: screenNumber)
-        
-        // Clean up global settings
-        let globalDefaults = UserDefaults(suiteName: "com.windock.global") ?? UserDefaults.standard
-        globalDefaults.removeObject(forKey: "WinDockReservation")
-        
-        // Remove dock info file
-        let dockInfoURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("WinDock")
-            .appendingPathComponent("dock-info.json")
-        
-        if let dockInfoURL = dockInfoURL, FileManager.default.fileExists(atPath: dockInfoURL.path) {
-            try? FileManager.default.removeItem(at: dockInfoURL)
-        }
-        
-        // Notify system about reservation removal
-        NotificationCenter.default.post(
-            name: NSNotification.Name("WinDockScreenReservationRemoved"),
-            object: self,
-            userInfo: ["screen": screen]
-        )
-        
-        AppLogger.shared.info("Removed screen space reservation for screen: \(screen.localizedName)")
-    }
-    
     private func getNotificationInfo(for app: NSRunningApplication) -> (hasNotifications: Bool, notificationCount: Int) {
         guard let bundleIdentifier = app.bundleIdentifier else {
             return (false, 0)
@@ -804,7 +586,7 @@ class AppManager: ObservableObject {
     private func getAppBadgeCount(bundleIdentifier: String) -> Int? {
         // Try to read badge count from running application
         let runningApps = NSWorkspace.shared.runningApplications
-        guard let app = runningApps.first(where: { $0.bundleIdentifier == bundleIdentifier }) else {
+        guard runningApps.first(where: { $0.bundleIdentifier == bundleIdentifier }) != nil else {
             return nil
         }
         
@@ -835,7 +617,8 @@ class AppManager: ObservableObject {
         
         if let appleScript = NSAppleScript(source: script) {
             var error: NSDictionary?
-            if let result = appleScript.executeAndReturnError(&error) {
+            let result = appleScript.executeAndReturnError(&error)
+            if error == nil {
                 return result.int32Value > 0 ? Int(result.int32Value) : 0
             }
         }
@@ -861,7 +644,8 @@ class AppManager: ObservableObject {
         
         if let appleScript = NSAppleScript(source: script) {
             var error: NSDictionary?
-            if let result = appleScript.executeAndReturnError(&error) {
+            let result = appleScript.executeAndReturnError(&error)
+            if error == nil {
                 return result.int32Value > 0 ? Int(result.int32Value) : 0
             }
         }

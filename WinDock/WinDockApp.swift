@@ -30,7 +30,7 @@ struct WinDockApp: App {
         WindowGroup("WinDock") {
             // Main content view with minimal size to ensure app is visible in dock
             ZStack {
-                ReservedPlace()
+                Color.clear
                     .frame(width: 1, height: 1)
                     .opacity(0.01) // Very slight opacity to keep window registered
                 
@@ -82,6 +82,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusBarItem()
         setupDockWindowsForAllScreens()
         
+        // Start WindowsResizeManager
+        // WindowsResizeManager.shared.start() # not ready
+        
         // Ensure app is properly activated
         NSApp.activate(ignoringOtherApps: true)
         
@@ -111,6 +114,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
+    }
+    
+    func applicationWillTerminate(_ notification: Notification) {
+        AppLogger.shared.info("Application will terminate")
+        WindowsResizeManager.shared.stop()
     }
     
     
@@ -386,60 +394,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    // Centralized frame calculation for dock position
-    func dockFrame(for position: DockPosition, screen: NSScreen) -> NSRect {
-        let visibleFrame = screen.visibleFrame
-        let dockHeight: CGFloat = getDockHeight()
-        
-        // Get padding values from UserDefaults
-        let paddingTop = CGFloat(UserDefaults.standard.double(forKey: "paddingTop"))
-        let paddingBottom = CGFloat(UserDefaults.standard.double(forKey: "paddingBottom"))
-        let paddingLeft = CGFloat(UserDefaults.standard.double(forKey: "paddingLeft"))
-        let paddingRight = CGFloat(UserDefaults.standard.double(forKey: "paddingRight"))
-        
-        switch position {
-        case .bottom:
-            // Use full screen frame for bottom to avoid safe area
-            return NSRect(
-                x: visibleFrame.minX + paddingLeft,
-                y: visibleFrame.minY + paddingBottom,
-                width: visibleFrame.width - paddingLeft - paddingRight,
-                height: dockHeight
-            )
-        case .top:
-            return NSRect(
-                x: visibleFrame.minX + paddingLeft,
-                y: visibleFrame.maxY - dockHeight - paddingTop,
-                width: visibleFrame.width - paddingLeft - paddingRight,
-                height: dockHeight
-            )
-        case .left:
-            return NSRect(
-                x: visibleFrame.minX + paddingLeft,
-                y: visibleFrame.minY + paddingBottom,
-                width: dockHeight,
-                height: visibleFrame.height - paddingTop - paddingBottom
-            )
-        case .right:
-            return NSRect(
-                x: visibleFrame.maxX - dockHeight - paddingRight,
-                y: visibleFrame.minY + paddingBottom,
-                width: dockHeight,
-                height: visibleFrame.height - paddingTop - paddingBottom
-            )
-        }
-    }
-    
-    private func getDockHeight() -> CGFloat {
-        let dockSize = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
-        switch dockSize {
-        case "small": return 48
-        case "medium": return 56
-        case "large": return 64
-        default: return 56
-        }
-    }
-
     private func setupDockWindowsForAllScreens() {
         // Prevent multiple simultaneous updates
         guard !isUpdatingDockWindows else { return }
@@ -452,92 +406,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         dockWindows.removeAll()
         
-        // Reserve screen space for the new dock position
-        reserveScreenSpace()
-        
-        // Notify ReservedPlace to update its position if needed
-        NotificationCenter.default.post(
-            name: NSNotification.Name("WinDockPositionChanged"),
-            object: nil,
-            userInfo: nil
-        )
-        
         // Small delay to ensure windows are fully closed
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             // Create a DockWindow for each screen
             for screen in NSScreen.screens {
                 let dockWindow = DockWindow()
-                let frame = self.dockFrame(for: self.dockPosition, screen: screen)
+                let frame = dockFrame(for: self.dockPosition, screen: screen)
                 dockWindow.setFrame(frame, display: true)
                 dockWindow.show()
                 self.dockWindows.append(dockWindow)
             }
             self.isUpdatingDockWindows = false
         }
-    }
-
-    private func reserveScreenSpace() {
-        let dockHeight = getDockHeight()
-        
-        // Get padding values from UserDefaults
-        let paddingTop = CGFloat(UserDefaults.standard.double(forKey: "paddingTop"))
-        let paddingBottom = CGFloat(UserDefaults.standard.double(forKey: "paddingBottom"))
-        let paddingLeft = CGFloat(UserDefaults.standard.double(forKey: "paddingLeft"))
-        let paddingRight = CGFloat(UserDefaults.standard.double(forKey: "paddingRight"))
-        
-        // Reserve screen space for each screen to prevent window overlap
-        for screen in NSScreen.screens {
-            let screenFrame = screen.frame // Use full screen frame
-            let visibleFrame = screen.visibleFrame
-            var reservedArea = CGRect.zero
-            
-            switch dockPosition {
-            case .bottom:
-                // Use full screen frame for bottom to avoid safe area
-                reservedArea = CGRect(
-                    x: screenFrame.minX + paddingLeft,
-                    y: screenFrame.minY + paddingBottom,
-                    width: screenFrame.width - paddingLeft - paddingRight,
-                    height: dockHeight
-                )
-            case .top:
-                reservedArea = CGRect(
-                    x: visibleFrame.minX + paddingLeft,
-                    y: visibleFrame.maxY - dockHeight - paddingTop,
-                    width: visibleFrame.width - paddingLeft - paddingRight,
-                    height: dockHeight
-                )
-            case .left:
-                reservedArea = CGRect(
-                    x: visibleFrame.minX + paddingLeft,
-                    y: visibleFrame.minY + paddingBottom,
-                    width: dockHeight,
-                    height: visibleFrame.height - paddingTop - paddingBottom
-                )
-            case .right:
-                reservedArea = CGRect(
-                    x: visibleFrame.maxX - dockHeight - paddingRight,
-                    y: visibleFrame.minY + paddingBottom,
-                    width: dockHeight,
-                    height: visibleFrame.height - paddingTop - paddingBottom
-                )
-            }
-            
-            // Store the reserved area information
-            let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int ?? 0
-            let screenKey = "WinDock.ReservedArea.\(screenNumber)"
-            UserDefaults.standard.set(NSStringFromRect(reservedArea), forKey: screenKey)
-            
-            AppLogger.shared.info("Reserved screen space: \(reservedArea) on screen \(screen.localizedName)")
-        }
-        
-        // Notify other applications about the screen space reservation
-        // This uses a notification that well-behaved apps might listen to
-        NotificationCenter.default.post(
-            name: NSNotification.Name("WinDockScreenSpaceReserved"),
-            object: nil,
-            userInfo: ["position": dockPosition.rawValue, "size": dockHeight]
-        )
     }
 
     // Call this method whenever the dock position changes (from settings or menu)

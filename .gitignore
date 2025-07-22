@@ -5,6 +5,7 @@
 *.xcworkspace
 *.xcuserstate
 *.xcuserdata
+xcdebugger
 
 # Build
 build/

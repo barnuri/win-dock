@@ -57,7 +57,6 @@ class DockWindow: NSPanel {
         self.title = "WinDock Taskbar"
 
         updatePosition()
-        registerScreenReservedArea()
         appManager.startMonitoring()
 
         NotificationCenter.default.addObserver(
@@ -75,7 +74,6 @@ class DockWindow: NSPanel {
             guard let self = self else { return }
             self.updatePosition()
             self.updateDockView()
-            self.registerScreenReservedArea()
         }
 
         setupDockView()
@@ -199,27 +197,14 @@ class DockWindow: NSPanel {
     
     @objc private func screenDidChange() {
         updatePosition()
-        registerScreenReservedArea()
     }
     
     private func updatePosition() {
         guard let appDelegate = NSApp.delegate as? AppDelegate,
               let screen = showOnAllSpaces ? NSScreen.main : NSScreen.screens.first else { return }
-        let newFrame = appDelegate.dockFrame(for: appDelegate.dockPosition, screen: screen)
+        let newFrame = dockFrame(for: appDelegate.dockPosition, screen: screen)
         setFrame(newFrame, display: true, animate: false)
         setupTrackingArea()
-    }
-    
-    private func getDockHeight() -> CGFloat {
-        switch dockSize {
-        case .small: return 48
-        case .medium: return 56
-        case .large: return 64
-        }
-    }
-    
-    private func registerScreenReservedArea() {
-        // No-op: now handled by AppDelegate's dockFrame logic and private API
     }
     
     func cleanup() {

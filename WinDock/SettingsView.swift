@@ -603,6 +603,15 @@ enum DockSize: String, CaseIterable {
         }
     }
     
+    var height: CGFloat {
+        switch self {
+        case .small: return 48
+        case .medium: return 56
+        case .large: return 64
+        }
+    }
+
+    
     var iconSize: CGFloat {
         switch self {
         case .small: return 40
@@ -720,8 +729,6 @@ struct BackupSettingsTab: View {
     }
 }
 
-}
-
 struct RunOnLoginToggleView: View {
     @StateObject private var loginItemManager = LoginItemManager.shared
     @State private var isEnabled: Bool = false
@@ -731,7 +738,7 @@ struct RunOnLoginToggleView: View {
         HStack {
             Toggle("Run WinDock on login", isOn: $isEnabled)
                 .disabled(isProcessing)
-                .onChange(of: isEnabled) { newValue in
+                .onChange(of: isEnabled) { _, newValue in
                     updateLoginItemStatus(enabled: newValue)
                 }
             
@@ -763,6 +770,55 @@ struct RunOnLoginToggleView: View {
                 }
             }
         }
+    }
+}
+
+func getDockHeight() -> CGFloat {
+    let dockSizeString = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
+    let dockSize = DockSize(rawValue: dockSizeString) ?? .medium
+    return dockSize.height
+}
+
+func dockFrame(for position: DockPosition, screen: NSScreen) -> NSRect {
+    let visibleFrame = screen.visibleFrame
+    let dockHeight: CGFloat = getDockHeight()
+    
+    // Get padding values from UserDefaults
+    let paddingTop = CGFloat(UserDefaults.standard.double(forKey: "paddingTop"))
+    let paddingBottom = CGFloat(UserDefaults.standard.double(forKey: "paddingBottom"))
+    let paddingLeft = CGFloat(UserDefaults.standard.double(forKey: "paddingLeft"))
+    let paddingRight = CGFloat(UserDefaults.standard.double(forKey: "paddingRight"))
+    
+    switch position {
+    case .bottom:
+        // Use full screen frame for bottom to avoid safe area
+        return NSRect(
+            x: visibleFrame.minX + paddingLeft,
+            y: visibleFrame.minY + paddingBottom,
+            width: visibleFrame.width - paddingLeft - paddingRight,
+            height: dockHeight
+        )
+    case .top:
+        return NSRect(
+            x: visibleFrame.minX + paddingLeft,
+            y: visibleFrame.maxY - dockHeight - paddingTop,
+            width: visibleFrame.width - paddingLeft - paddingRight,
+            height: dockHeight
+        )
+    case .left:
+        return NSRect(
+            x: visibleFrame.minX + paddingLeft,
+            y: visibleFrame.minY + paddingBottom,
+            width: dockHeight,
+            height: visibleFrame.height - paddingTop - paddingBottom
+        )
+    case .right:
+        return NSRect(
+            x: visibleFrame.maxX - dockHeight - paddingRight,
+            y: visibleFrame.minY + paddingBottom,
+            width: dockHeight,
+            height: visibleFrame.height - paddingTop - paddingBottom
+        )
     }
 }
 
