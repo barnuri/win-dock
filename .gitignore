@@ -28,3 +28,4 @@ dmg_temp/
 logs
 WinDock/WinDockApp.swift
 *.zip
+*.xcbkptlist
