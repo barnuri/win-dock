@@ -24,7 +24,6 @@ import os
 import plistlib
 import shutil
 import subprocess
-import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -69,11 +68,11 @@ class ReleaseManager:
     def cleanup_stale_resources(self):
         """Clean up any stale resources that might interfere with the release process."""
         print("🧹 Cleaning up stale resources...")
-        
+
         # Remove existing DMG and ZIP files
         dmg_path = self.root_dir / "WinDock.dmg"
         zip_path = self.root_dir / "WinDock.zip"
-        
+
         for file_path in [dmg_path, zip_path]:
             if file_path.exists():
                 try:
@@ -94,8 +93,7 @@ class ReleaseManager:
                         if len(parts) > 1:
                             volume_path = parts[1].split(" (")[0]
                             try:
-                                subprocess.run(["hdiutil", "detach", volume_path], 
-                                             capture_output=True, check=False)
+                                subprocess.run(["hdiutil", "detach", volume_path], capture_output=True, check=False)
                                 print(f"🗑️ Unmounted {volume_path}")
                             except Exception:
                                 pass
@@ -116,7 +114,7 @@ class ReleaseManager:
                 self.current_version = "1.0.0"
                 print(f"📊 No existing version found, defaulting to: {self.current_version}")
         except Exception as e:
-            sys.exit(f"❌ Error reading Info.plist: {e}")
+            raise RuntimeError(f"❌ Error reading Info.plist: {e}")
 
     def calculate_new_version(self, version_type):
         """Calculate the new version based on the bump type."""
@@ -141,7 +139,7 @@ class ReleaseManager:
             self.new_version = f"{major}.{minor}.{patch}"
             print(f"📈 New version: {self.new_version}")
         except Exception as e:
-            sys.exit(f"❌ Error calculating new version: {e}")
+            raise RuntimeError(f"❌ Error calculating new version: {e}")
 
     def update_version_in_plist(self):
         """Update the version in Info.plist."""
@@ -164,7 +162,7 @@ class ReleaseManager:
 
             print(f"📝 Updated Info.plist with version {self.new_version}")
         except Exception as e:
-            sys.exit(f"❌ Error updating Info.plist: {e}")
+            raise RuntimeError(f"❌ Error updating Info.plist: {e}")
 
     def build_app(self):
         """Build the application using the build.sh script."""
@@ -181,7 +179,7 @@ class ReleaseManager:
 
             # Verify the build was successful
             if not self.app_path.exists():
-                sys.exit(f"❌ Build failed - WinDock.app not found at {self.app_path}")
+                raise RuntimeError(f"❌ Build failed - WinDock.app not found at {self.app_path}")
 
             print("✅ Build successful")
 
@@ -195,9 +193,9 @@ class ReleaseManager:
                 print(f"{is_dir} {size:10} {mod_time} {item.name}")
 
         except subprocess.CalledProcessError as e:
-            sys.exit(f"❌ Build failed: {e}")
+            raise RuntimeError(f"❌ Build failed: {e}")
         except Exception as e:
-            sys.exit(f"❌ Error during build process: {e}")
+            raise RuntimeError(f"❌ Error during build process: {e}")
 
     def create_dmg(self):
         """Create a DMG file for distribution."""
@@ -221,13 +219,13 @@ class ReleaseManager:
                 subprocess.run(
                     ["hdiutil", "detach", f"/Volumes/{volume_name}"],
                     capture_output=True,
-                    check=False  # Don't fail if nothing to detach
+                    check=False,  # Don't fail if nothing to detach
                 )
                 # Also try to detach any generic WinDock volumes
                 subprocess.run(
                     ["hdiutil", "detach", "/Volumes/WinDock"],
                     capture_output=True,
-                    check=False  # Don't fail if nothing to detach
+                    check=False,  # Don't fail if nothing to detach
                 )
             except Exception:
                 pass  # Ignore detach errors
@@ -277,9 +275,9 @@ class ReleaseManager:
                 print(f"Modified: {mod_time}")
 
         except subprocess.CalledProcessError as e:
-            sys.exit(f"❌ Error creating DMG: {e}")
+            raise RuntimeError(f"❌ Error creating DMG: {e}")
         except Exception as e:
-            sys.exit(f"❌ Error during DMG creation: {e}")
+            raise RuntimeError(f"❌ Error during DMG creation: {e}")
 
     def commit_version_bump(self):
         """Commit the version bump to git."""
@@ -633,7 +631,7 @@ def main():
         print(f"❌ Error during release process: {e}")
         print("Reverting Info.plist to the original version...")
         # use git to reset the file
-        subprocess.run(["git", "checkout", "--", str(release_manager.info_plist_path)], check=True)
+        subprocess.run(["git", "restore", str(release_manager.info_plist_path)], check=True)
     print("🚀 Release script completed successfully!")
     print(f"https://github.com/barnuri/win-dock/releases/tag/{release_manager.tag_name}")
 
