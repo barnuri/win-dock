@@ -48,6 +48,9 @@ class ReleaseManager:
         """Main execution flow for the release process."""
         print(f"🚀 Starting WinDock release process ({version_type})...")
 
+        # Clean up any stale resources first
+        self.cleanup_stale_resources()
+
         self.get_current_version()
         self.calculate_new_version(version_type)
         self.update_version_in_plist()
@@ -62,6 +65,42 @@ class ReleaseManager:
 
         self.cleanup()
         print(f"✅ Release process completed successfully! Version {self.new_version} released.")
+
+    def cleanup_stale_resources(self):
+        """Clean up any stale resources that might interfere with the release process."""
+        print("🧹 Cleaning up stale resources...")
+        
+        # Remove existing DMG and ZIP files
+        dmg_path = self.root_dir / "WinDock.dmg"
+        zip_path = self.root_dir / "WinDock.zip"
+        
+        for file_path in [dmg_path, zip_path]:
+            if file_path.exists():
+                try:
+                    file_path.unlink()
+                    print(f"🗑️ Removed existing {file_path.name}")
+                except Exception as e:
+                    print(f"⚠️ Warning: Could not remove {file_path.name}: {e}")
+
+        # Unmount any existing WinDock volumes
+        try:
+            # Try to unmount any mounted WinDock volumes
+            result = subprocess.run(["mount"], capture_output=True, text=True)
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    if "WinDock" in line and "/Volumes/" in line:
+                        # Extract volume path
+                        parts = line.split(" on ")
+                        if len(parts) > 1:
+                            volume_path = parts[1].split(" (")[0]
+                            try:
+                                subprocess.run(["hdiutil", "detach", volume_path], 
+                                             capture_output=True, check=False)
+                                print(f"🗑️ Unmounted {volume_path}")
+                            except Exception:
+                                pass
+        except Exception:
+            pass  # Ignore any errors during cleanup
 
     def get_current_version(self):
         """Get the current version from Info.plist."""
@@ -171,6 +210,28 @@ class ReleaseManager:
             return
 
         try:
+            # Clean up any existing DMG file first
+            if dmg_path.exists():
+                print(f"🗑️ Removing existing DMG: {dmg_name}")
+                dmg_path.unlink()
+
+            # Unmount any existing WinDock volumes that might be mounted
+            try:
+                volume_name = f"WinDock {self.new_version}"
+                subprocess.run(
+                    ["hdiutil", "detach", f"/Volumes/{volume_name}"],
+                    capture_output=True,
+                    check=False  # Don't fail if nothing to detach
+                )
+                # Also try to detach any generic WinDock volumes
+                subprocess.run(
+                    ["hdiutil", "detach", "/Volumes/WinDock"],
+                    capture_output=True,
+                    check=False  # Don't fail if nothing to detach
+                )
+            except Exception:
+                pass  # Ignore detach errors
+
             # Create temporary directory for DMG creation
             with tempfile.TemporaryDirectory() as temp_dir:
                 dmg_temp = Path(temp_dir)
@@ -565,7 +626,14 @@ def main():
     release_manager = ReleaseManager()
     # Set dry run mode attribute if we implement it
     release_manager.dry_run = args.dry_run if hasattr(args, "dry_run") else False
-    release_manager.run(args.version_type)
+    try:
+        release_manager.run(args.version_type)
+    except Exception as e:
+        # revert Info.plist to the original version in case of failure
+        print(f"❌ Error during release process: {e}")
+        print("Reverting Info.plist to the original version...")
+        # use git to reset the file
+        subprocess.run(["git", "checkout", "--", str(release_manager.info_plist_path)], check=True)
     print("🚀 Release script completed successfully!")
     print(f"https://github.com/barnuri/win-dock/releases/tag/{release_manager.tag_name}")
 
