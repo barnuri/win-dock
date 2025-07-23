@@ -147,30 +147,38 @@ class WindowsResizeManager: ObservableObject {
             return
         }
 
-        AppLogger.shared.info("Checking all windows. Total windows: \(windowList.count), Screens: \(NSScreen.screens.count)")
 
-        for windowInfo in windowList {
+        let filteredWindows = windowList.compactMap { windowInfo -> (windowInfo: [String: Any], pid: pid_t, windowFrame: CGRect, app: NSRunningApplication)? in
             guard 
-                let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
-                let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
-                let windowFrame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
-                let app = NSRunningApplication(processIdentifier: pid),
-                app.activationPolicy == .regular,
-                app.bundleIdentifier != Bundle.main.bundleIdentifier,
-                !app.isTerminated,
-                !app.isHidden,
-                windowInfo[kCGWindowIsOnscreen as String] as? Bool == true,
-                windowInfo[kCGWindowLayer as String] as? Int == 0
+            let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+            let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
+            let windowFrame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+            let app = NSRunningApplication(processIdentifier: pid),
+            app.activationPolicy == .regular,
+            app.bundleIdentifier != Bundle.main.bundleIdentifier,
+            !app.isTerminated,
+            !app.isHidden,
+            windowInfo[kCGWindowIsOnscreen as String] as? Bool == true,
+            windowInfo[kCGWindowLayer as String] as? Int == 0
             else {
-                continue
+            return nil
             }
+            
+            return (windowInfo: windowInfo, pid: pid, windowFrame: windowFrame, app: app)
+        }
+        guard !filteredWindows.isEmpty else {
+            return
+        }
+        // AppLogger.shared.info("Checking windows: \(filteredWindows.count), Screens: \(NSScreen.screens.count), Apps: \(Set(filteredWindows.map { $0.app.localizedName ?? "Unknown" }).joined(separator: ", "))")
+
+        for filteredWindow in filteredWindows {
+            let windowFrame = filteredWindow.windowFrame
+            let app = filteredWindow.app
 
             // Check all screens to see if this window overlaps with any dock area
             for (screen, dockArea) in dockAreas {
                 // Check if window is on this screen and overlaps with dock area
                 if screen.frame.intersects(windowFrame) && windowFrame.intersects(dockArea) {
-                    let screenIndex = NSScreen.screens.firstIndex(of: screen) ?? -1
-                    AppLogger.shared.info("Window overlaps with dock area on screen \(screenIndex). Window: \(windowFrame), Dock area: \(dockArea)")
                     var newFrame = windowFrame
                     let screenFrame = screen.frame
                     let margin: CGFloat = 15
@@ -190,34 +198,24 @@ class WindowsResizeManager: ObservableObject {
                     }
                     
                     var needToMove = false
-                    switch dockPosition {
-                    case .bottom:
-                        if resized {
-                            newFrame.origin.y = screenFrame.minY + margin
-                        } else if dockArea.minY - margin < screenFrame.maxY {
-                            newFrame.origin.y = dockArea.minY + margin
-                            needToMove = true
-                        }
-                    case .top:
-                        if resized {
-                            newFrame.origin.y = screenFrame.maxY - newFrame.height - margin
-                        } else if dockArea.maxY + margin > screenFrame.minY {
-                            newFrame.origin.y = dockArea.maxY - newFrame.height - margin
-                            needToMove = true
-                        }
-                    case .left:
-                        if resized {
-                            newFrame.origin.x = dockArea.maxX + margin
-                        } else if dockArea.minX < screenFrame.maxX - margin {
-                            newFrame.origin.x = screenFrame.minX + margin
-                            needToMove = true
-                        }
-                    case .right:
-                        if resized {
-                            newFrame.origin.x = screenFrame.maxX - newFrame.width - margin
-                        } else if dockArea.maxX > screenFrame.minX + margin {
-                            newFrame.origin.x = dockArea.minX + margin
-                            needToMove = true
+                    if !resized {
+                        switch dockPosition {
+                            case .bottom:
+                                if newFrame.minY > dockArea.maxY {
+                                    needToMove = true
+                                }
+                            case .top:
+                                if dockArea.maxY < screenFrame.minY {
+                                    needToMove = true
+                                }
+                            case .left:
+                                if dockArea.minX > screenFrame.maxX {
+                                    needToMove = true
+                                }
+                            case .right:
+                                if dockArea.maxX < screenFrame.minX {
+                                    needToMove = true
+                                }
                         }
                     }
 
@@ -225,6 +223,16 @@ class WindowsResizeManager: ObservableObject {
                         return
                     }
 
+                    switch dockPosition {
+                        case .bottom:
+                            newFrame.origin.y = dockArea.maxY
+                        case .top:
+                            newFrame.origin.y = screenFrame.minY
+                        case .left:
+                            newFrame.origin.x = dockArea.maxX
+                        case .right:
+                            newFrame.origin.x = screenFrame.minX
+                    }
                     
                     AppLogger.shared.info("Adjusting window for app \(app.localizedName ?? "Unknown") from \(windowFrame) to \(newFrame) on screen \(screen.frame). Resized: \(resized), NeedToMove: \(needToMove)")
                     
