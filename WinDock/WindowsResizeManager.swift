@@ -87,7 +87,7 @@ class WindowsResizeManager: ObservableObject {
         
         updateDockAreaFromSettings()
         if isRunning {
-            checkAllWindows()
+            resizeAndMoveWindowsIfNeeded()
         }
     }
 
@@ -95,7 +95,7 @@ class WindowsResizeManager: ObservableObject {
         updateDockAreaFromSettings()
         if isRunning {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                self.checkAllWindows()
+                self.resizeAndMoveWindowsIfNeeded()
             }
         }
     }
@@ -132,11 +132,11 @@ class WindowsResizeManager: ObservableObject {
     private func startPeriodicMonitoring() {
         monitoringTimer?.invalidate()
         monitoringTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            self?.checkAllWindows()
+            self?.resizeAndMoveWindowsIfNeeded()
         }
     }
 
-    func checkAllWindows() {
+    func resizeAndMoveWindowsIfNeeded() {
         guard isRunning, !dockAreas.isEmpty else {
             AppLogger.shared.warning("WindowsResizeManager is not running or dock areas are empty.")
             return
@@ -171,96 +171,91 @@ class WindowsResizeManager: ObservableObject {
                 if screen.frame.intersects(windowFrame) && windowFrame.intersects(dockArea) {
                     let screenIndex = NSScreen.screens.firstIndex(of: screen) ?? -1
                     AppLogger.shared.info("Window overlaps with dock area on screen \(screenIndex). Window: \(windowFrame), Dock area: \(dockArea)")
-                    adjust(windowFrame: windowFrame, overlapping: dockArea, on: screen, for: app)
-                    break // Only adjust once per window
+                    var newFrame = windowFrame
+                    let screenFrame = screen.frame
+                    let margin: CGFloat = 15
+                    let maxHeight = screenFrame.height - dockArea.height - margin
+                    let maxWidth = screenFrame.width - dockArea.width - margin
+                    var resized = false
+                    if dockPosition == .bottom || dockPosition == .top {
+                        if maxHeight < newFrame.height {
+                            newFrame.size.height = maxHeight
+                            resized = true
+                        }
+                    } else {
+                        if maxWidth < newFrame.width {
+                            newFrame.size.width = maxWidth
+                            resized = true
+                        }
+                    }
+                    
+                    var needToMove = false
+                    switch dockPosition {
+                    case .bottom:
+                        if resized {
+                            newFrame.origin.y = screenFrame.minY + margin
+                        } else if dockArea.minY - margin < screenFrame.maxY {
+                            newFrame.origin.y = dockArea.minY + margin
+                            needToMove = true
+                        }
+                    case .top:
+                        if resized {
+                            newFrame.origin.y = screenFrame.maxY - newFrame.height - margin
+                        } else if dockArea.maxY + margin > screenFrame.minY {
+                            newFrame.origin.y = dockArea.maxY - newFrame.height - margin
+                            needToMove = true
+                        }
+                    case .left:
+                        if resized {
+                            newFrame.origin.x = dockArea.maxX + margin
+                        } else if dockArea.minX < screenFrame.maxX - margin {
+                            newFrame.origin.x = screenFrame.minX + margin
+                            needToMove = true
+                        }
+                    case .right:
+                        if resized {
+                            newFrame.origin.x = screenFrame.maxX - newFrame.width - margin
+                        } else if dockArea.maxX > screenFrame.minX + margin {
+                            newFrame.origin.x = dockArea.minX + margin
+                            needToMove = true
+                        }
+                    }
+
+                    if !resized && !needToMove {
+                        return
+                    }
+
+                    
+                    AppLogger.shared.info("Adjusting window for app \(app.localizedName ?? "Unknown") from \(windowFrame) to \(newFrame) on screen \(screen.frame). Resized: \(resized), NeedToMove: \(needToMove)")
+                    
+                    // Get the application's accessibility element
+                    let axApp = AXUIElementCreateApplication(app.processIdentifier)
+                    
+                    // Get the focused window
+                    var focusedWindowRef: CFTypeRef?
+                    let result = AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindowRef)
+                    
+                    if result == .success, let focusedWindow = focusedWindowRef as! AXUIElement? {
+                        if resized {
+                            if AXUIElementSetAttributeValue(focusedWindow, kAXSizeAttribute as CFString, AXValue.from(value: newFrame.size, type: .cgSize)!) == .success {
+                                AppLogger.shared.info("Successfully adjusted window size.")
+                            } else {
+                                AppLogger.shared.error("Failed to adjust window size for app \(app.localizedName ?? "Unknown")")
+                            }
+                        }
+                        
+                        if needToMove {
+                            if AXUIElementSetAttributeValue(focusedWindow, kAXPositionAttribute as CFString, AXValue.from(value: newFrame.origin, type: .cgPoint)!) == .success {
+                                AppLogger.shared.info("Successfully moved window to new position.")
+                            } else {
+                                AppLogger.shared.error("Failed to move window for app \(app.localizedName ?? "Unknown")")
+                            }
+                        }
+                    } else {
+                        AppLogger.shared.error("Failed to get focused window for app \(app.localizedName ?? "Unknown")")
+                    }
                 }
             }
-        }
-    }
-
-    private func adjust(windowFrame: CGRect, overlapping dockArea: CGRect, on screen: NSScreen, for targetApp: NSRunningApplication) {
-        var newFrame = windowFrame
-        let screenFrame = screen.frame
-        let margin: CGFloat = 15
-        let maxHeight = screenFrame.height - dockArea.height - margin
-        let maxWidth = screenFrame.width - dockArea.width - margin
-        var resized = false
-        if dockPosition == .bottom || dockPosition == .top {
-            if maxHeight < newFrame.height {
-                newFrame.size.height = maxHeight
-                resized = true
-            }
-        } else {
-            if maxWidth < newFrame.width {
-                newFrame.size.width = maxWidth
-                resized = true
-            }
-        }
-        
-        var needToMove = false
-        switch dockPosition {
-        case .bottom:
-            if resized {
-                newFrame.origin.y = screenFrame.minY + margin
-            } else if dockArea.minY < screenFrame.maxY {
-                newFrame.origin.y = dockArea.minY + margin
-                needToMove = true
-            }
-        case .top:
-            if resized {
-                newFrame.origin.y = screenFrame.maxY - newFrame.height - margin
-            } else if dockArea.maxY > screenFrame.minY {
-                newFrame.origin.y = dockArea.maxY - newFrame.height - margin
-                needToMove = true
-            }
-        case .left:
-            if resized {
-                newFrame.origin.x = dockArea.maxX + margin
-            } else if dockArea.minX < screenFrame.maxX {
-                newFrame.origin.x = screenFrame.minX + margin
-                needToMove = true
-            }
-        case .right:
-            if resized {
-                newFrame.origin.x = screenFrame.maxX - newFrame.width - margin
-            } else if dockArea.maxX > screenFrame.minX {
-                newFrame.origin.x = dockArea.minX + margin
-                needToMove = true
-            }
-        }
-
-        if !resized && !needToMove {
-            return
-        }
-
-        
-        AppLogger.shared.info("Adjusting window for app \(targetApp.localizedName ?? "Unknown") from \(windowFrame) to \(newFrame) on screen \(screen.frame). Resized: \(resized), NeedToMove: \(needToMove)")
-        
-        // Get the application's accessibility element
-        let axApp = AXUIElementCreateApplication(targetApp.processIdentifier)
-        
-        // Get the focused window
-        var focusedWindowRef: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindowRef)
-        
-        if result == .success, let focusedWindow = focusedWindowRef as! AXUIElement? {
-            if resized {
-                if AXUIElementSetAttributeValue(focusedWindow, kAXSizeAttribute as CFString, AXValue.from(value: newFrame.size, type: .cgSize)!) == .success {
-                    AppLogger.shared.info("Successfully adjusted window size.")
-                } else {
-                    AppLogger.shared.error("Failed to adjust window size for app \(targetApp.localizedName ?? "Unknown")")
-                }
-            }
-            
-            if needToMove {
-                if AXUIElementSetAttributeValue(focusedWindow, kAXPositionAttribute as CFString, AXValue.from(value: newFrame.origin, type: .cgPoint)!) == .success {
-                    AppLogger.shared.info("Successfully moved window to new position.")
-                } else {
-                    AppLogger.shared.error("Failed to move window for app \(targetApp.localizedName ?? "Unknown")")
-                }
-            }
-        } else {
-            AppLogger.shared.error("Failed to get focused window for app \(targetApp.localizedName ?? "Unknown")")
         }
     }
 }
