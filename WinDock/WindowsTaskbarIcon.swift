@@ -41,19 +41,26 @@ struct WindowsTaskbarIcon: View {
                 }
                 
                 // Notification badge (top right corner)
-                if app.hasNotifications {
+                if app.hasNotifications && app.notificationCount > 0 {
                     VStack {
                         HStack {
                             Spacer()
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 12, height: 12)
-                                .overlay(
-                                    Text("\(min(app.notificationCount, 9))")
-                                        .font(.system(size: 8, weight: .bold))
-                                        .foregroundColor(.white)
-                                )
-                                .offset(x: 4, y: -4)
+                            ZStack {
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: app.notificationCount > 9 ? 16 : 14, height: app.notificationCount > 9 ? 16 : 14)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(Color.white, lineWidth: 1.5)
+                                    )
+                                
+                                Text(app.notificationCount > 99 ? "99+" : "\(app.notificationCount)")
+                                    .font(.system(size: app.notificationCount > 9 ? 8 : 9, weight: .bold, design: .rounded))
+                                    .foregroundColor(.white)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.6)
+                            }
+                            .offset(x: 6, y: -6)
                         }
                         Spacer()
                     }
@@ -63,16 +70,19 @@ struct WindowsTaskbarIcon: View {
             // Running indicator underline (Windows 11 style)
             if app.isRunning {
                 Rectangle()
-                    .fill(app.runningApplication?.isActive == true ? Color.accentColor : Color.primary.opacity(0.6))
-                    .frame(width: 20, height: 2)
-                    .cornerRadius(1)
-                    .padding(.top, 2)
+                    .fill(app.runningApplication?.isActive == true ? 
+                          Color.accentColor : 
+                          Color(NSColor.controlAccentColor).opacity(0.7))
+                    .frame(width: iconSize * 0.4, height: 3)
+                    .cornerRadius(1.5)
+                    .padding(.top, 1)
+                    .animation(.easeInOut(duration: 0.2), value: app.runningApplication?.isActive)
             } else {
                 // Placeholder to maintain consistent spacing
                 Rectangle()
                     .fill(Color.clear)
-                    .frame(width: 20, height: 2)
-                    .padding(.top, 2)
+                    .frame(width: iconSize * 0.4, height: 3)
+                    .padding(.top, 1)
             }
             
             // App label (optional)
@@ -102,12 +112,19 @@ struct WindowsTaskbarIcon: View {
         .onHover { hovering in
             isHovering = hovering
             if hovering && app.isRunning && app.windowCount > 0 {
-                // Start timer for preview delay
-                hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
-                    showWindowPreview = true
+                // Cancel any existing timer to prevent multiple timers
+                hoverTimer?.invalidate()
+                hoverTimer = nil
+                
+                // Start new timer for preview delay
+                hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak hoverTimer] _ in
+                    // Only show if this timer wasn't cancelled
+                    if hoverTimer != nil {
+                        showWindowPreview = true
+                    }
                 }
             } else {
-                // Cancel timer and hide preview
+                // Cancel timer and hide preview immediately
                 hoverTimer?.invalidate()
                 hoverTimer = nil
                 showWindowPreview = false
@@ -115,6 +132,11 @@ struct WindowsTaskbarIcon: View {
         }
         .popover(isPresented: $showWindowPreview, arrowEdge: .top) {
             WindowPreviewView(app: app, appManager: appManager)
+                .onDisappear {
+                    // Clean up timer when popover is dismissed
+                    hoverTimer?.invalidate()
+                    hoverTimer = nil
+                }
         }
         .onTapGesture {
             handleTap()
@@ -160,6 +182,11 @@ struct WindowsTaskbarIcon: View {
         }
         .animation(.easeInOut(duration: 0.2), value: isDragging)
         .help(toolTip)
+        .onDisappear {
+            // Clean up timer when view disappears
+            hoverTimer?.invalidate()
+            hoverTimer = nil
+        }
     }
     
     private var toolTip: String {

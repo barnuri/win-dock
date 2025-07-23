@@ -56,8 +56,10 @@ class DockWindow: NSPanel {
         // Set a proper window title for app switcher
         self.title = "WinDock Taskbar"
 
+        // Set initial alpha value based on auto-hide setting
+        alphaValue = autoHide ? 0.0 : 1.0
+        
         updatePosition()
-        registerScreenReservedArea()
         appManager.startMonitoring()
 
         NotificationCenter.default.addObserver(
@@ -75,7 +77,7 @@ class DockWindow: NSPanel {
             guard let self = self else { return }
             self.updatePosition()
             self.updateDockView()
-            self.registerScreenReservedArea()
+            self.handleAutoHideSettingChange()
         }
 
         setupDockView()
@@ -98,6 +100,17 @@ class DockWindow: NSPanel {
         guard let hostingView = dockView else { return }
         hostingView.rootView = DockView()
         setupTrackingArea()
+    }
+    
+    private func handleAutoHideSettingChange() {
+        // If auto-hide is off, ensure the dock is fully visible
+        if !autoHide && alphaValue < 1.0 {
+            hideTimer?.invalidate()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.2
+                animator().alphaValue = 1.0
+            }
+        }
     }
     
     private func setupTrackingArea() {
@@ -199,27 +212,14 @@ class DockWindow: NSPanel {
     
     @objc private func screenDidChange() {
         updatePosition()
-        registerScreenReservedArea()
     }
     
     private func updatePosition() {
         guard let appDelegate = NSApp.delegate as? AppDelegate,
               let screen = showOnAllSpaces ? NSScreen.main : NSScreen.screens.first else { return }
-        let newFrame = appDelegate.dockFrame(for: appDelegate.dockPosition, screen: screen)
+        let newFrame = dockFrame(for: appDelegate.dockPosition, screen: screen)
         setFrame(newFrame, display: true, animate: false)
         setupTrackingArea()
-    }
-    
-    private func getDockHeight() -> CGFloat {
-        switch dockSize {
-        case .small: return 48
-        case .medium: return 56
-        case .large: return 64
-        }
-    }
-    
-    private func registerScreenReservedArea() {
-        // No-op: now handled by AppDelegate's dockFrame logic and private API
     }
     
     func cleanup() {

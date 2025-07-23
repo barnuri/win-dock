@@ -398,8 +398,8 @@ struct DateTimeView: View {
                     .multilineTextAlignment(.center)
                 
                 Text(dateString)
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 11))
+                    .foregroundColor(.primary)
                     .multilineTextAlignment(.center)
             }
             .padding(.horizontal, 8)
@@ -434,14 +434,14 @@ struct CalendarView: View {
     
     var body: some View {
         VStack(spacing: 16) {
-            VStack(spacing: 8) {
+            VStack(spacing: 12) {
                 Text(monthYearString)
                     .font(.headline)
                     .fontWeight(.medium)
                 
                 Text(fullDateString)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .font(.headline)
+                    .fontWeight(.medium)
             }
             
             // Simple calendar grid would go here

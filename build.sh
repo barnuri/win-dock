@@ -4,7 +4,10 @@ set -e
 rm -rf build/Build/Products/Release || true # Clean previous build artifacts
 
 # Only show errors from xcodebuild (no grep, use xcodebuild options)
-xcodebuild -scheme WinDock -configuration Release -derivedDataPath build -quiet -showBuildTimingSummary -hideShellScriptEnvironment | xcpretty && exit ${PIPESTATUS[0]}
+xcodebuild -scheme WinDock -configuration Release -derivedDataPath build -quiet -showBuildTimingSummary -hideShellScriptEnvironment | xcpretty
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    exit ${PIPESTATUS[0]}
+fi
 
 # Copy icon.png to the app's resources directory
 if [ -f "icon.png" ]; then
@@ -20,3 +23,5 @@ if [ -f "icon.png" ]; then
 else
     echo "Warning: icon.png not found. Icon not copied to app bundle."
 fi
+
+echo "build finished successfully"

@@ -5,6 +5,7 @@
 *.xcworkspace
 *.xcuserstate
 *.xcuserdata
+xcdebugger
 
 # Build
 build/
@@ -27,3 +28,5 @@ dmg_temp/
 logs
 WinDock/WinDockApp.swift
 *.zip
+*.xcbkptlist
+WinDock.xcodeproj/xcuserdata
