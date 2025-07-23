@@ -156,7 +156,11 @@ class WindowsResizeManager: ObservableObject {
                 let windowFrame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
                 let app = NSRunningApplication(processIdentifier: pid),
                 app.activationPolicy == .regular,
-                app.bundleIdentifier != Bundle.main.bundleIdentifier 
+                app.bundleIdentifier != Bundle.main.bundleIdentifier,
+                !app.isTerminated,
+                !app.isHidden,
+                windowInfo[kCGWindowIsOnscreen as String] as? Bool == true,
+                windowInfo[kCGWindowLayer as String] as? Int == 0
             else {
                 continue
             }
@@ -177,106 +181,98 @@ class WindowsResizeManager: ObservableObject {
     private func adjust(windowFrame: CGRect, overlapping dockArea: CGRect, on screen: NSScreen, for targetApp: NSRunningApplication) {
         var newFrame = windowFrame
         let screenFrame = screen.frame
-        let margin: CGFloat = 4
-
+        let margin: CGFloat = 15
+        let maxHeight = screenFrame.height - dockArea.height - margin
+        let maxWidth = screenFrame.width - dockArea.width - margin
+        var resized = false
+        if dockPosition == .bottom || dockPosition == .top {
+            if maxHeight < newFrame.height {
+                newFrame.size.height = maxHeight
+                resized = true
+            }
+        } else {
+            if maxWidth < newFrame.width {
+                newFrame.size.width = maxWidth
+                resized = true
+            }
+        }
+        
+        var needToMove = false
         switch dockPosition {
         case .bottom:
-            newFrame.origin.y = dockArea.maxY + margin
+            if resized {
+                newFrame.origin.y = screenFrame.minY + margin
+            } else if dockArea.minY < screenFrame.maxY {
+                newFrame.origin.y = dockArea.minY + margin
+                needToMove = true
+            }
         case .top:
-            newFrame.origin.y = dockArea.minY - newFrame.height - margin
+            if resized {
+                newFrame.origin.y = screenFrame.maxY - newFrame.height - margin
+            } else if dockArea.maxY > screenFrame.minY {
+                newFrame.origin.y = dockArea.maxY - newFrame.height - margin
+                needToMove = true
+            }
         case .left:
-            newFrame.origin.x = dockArea.maxX + margin
+            if resized {
+                newFrame.origin.x = dockArea.maxX + margin
+            } else if dockArea.minX < screenFrame.maxX {
+                newFrame.origin.x = screenFrame.minX + margin
+                needToMove = true
+            }
         case .right:
-            newFrame.origin.x = dockArea.minX - newFrame.width - margin
-        }
-
-        // Ensure the window remains within screen bounds after moving
-        if newFrame.maxX > screenFrame.maxX {
-            newFrame.origin.x = screenFrame.maxX - newFrame.width
-        }
-        if newFrame.minX < screenFrame.minX {
-            newFrame.origin.x = screenFrame.minX
-        }
-        if newFrame.maxY > screenFrame.maxY {
-            newFrame.origin.y = screenFrame.maxY - newFrame.height
-        }
-        if newFrame.minY < screenFrame.minY {
-            newFrame.origin.y = screenFrame.minY
-        }
-
-        // Check if adjustment is actually needed (avoid unnecessary moves)
-        let deltaX = abs(newFrame.origin.x - windowFrame.origin.x)
-        let deltaY = abs(newFrame.origin.y - windowFrame.origin.y)
-        if deltaX < 1 && deltaY < 1 {
-            AppLogger.shared.info("No adjustment needed for window at \(windowFrame.origin) - already positioned correctly")
-            return
-        }
-
-        AppLogger.shared.info("Adjusting window for app: \(targetApp.localizedName ?? "Unknown") from \(windowFrame.origin) to \(newFrame.origin)")
-
-        // Directly work with the target application
-        let appElement = AXUIElementCreateApplication(targetApp.processIdentifier)
-        var windowsRef: CFTypeRef?
-
-        guard 
-            AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-            let axWindows = windowsRef as? [AXUIElement] 
-        else {
-            AppLogger.shared.error("Failed to retrieve windows for app: \(targetApp.localizedName ?? "Unknown")")
-            return
-        }
-
-        for axWindow in axWindows {
-            var position = CGPoint.zero
-            var size = CGSize.zero
-
-            if 
-                let positionValue = getAXAttribute(for: axWindow, attribute: kAXPositionAttribute as String),
-                let sizeValue = getAXAttribute(for: axWindow, attribute: kAXSizeAttribute as String),
-                AXValueGetValue(positionValue, .cgPoint, &position),
-                AXValueGetValue(sizeValue, .cgSize, &size) 
-            {
-                let currentFrame = CGRect(origin: position, size: size)
-                
-                // Check if this window matches the one we want to adjust
-                if abs(currentFrame.origin.x - windowFrame.origin.x) < 5 &&
-                   abs(currentFrame.origin.y - windowFrame.origin.y) < 5 &&
-                   abs(currentFrame.width - windowFrame.width) < 5 &&
-                   abs(currentFrame.height - windowFrame.height) < 5 
-                {
-                    if let newPositionValue = AXValue.from(value: newFrame.origin, type: .cgPoint) {
-                        let result = AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, newPositionValue)
-                        if result == .success {
-                            AppLogger.shared.info("Successfully adjusted window position from \(currentFrame.origin) to \(newFrame.origin) for app: \(targetApp.localizedName ?? "Unknown")")
-                        } else {
-                            AppLogger.shared.error("Failed to set window position. AX result: \(result)")
-                        }
-                    } else {
-                        AppLogger.shared.error("Failed to create AXValue for new position.")
-                    }
-                    return
-                }
+            if resized {
+                newFrame.origin.x = screenFrame.maxX - newFrame.width - margin
+            } else if dockArea.maxX > screenFrame.minX {
+                newFrame.origin.x = dockArea.minX + margin
+                needToMove = true
             }
         }
 
-        AppLogger.shared.warning("Could not find matching window to adjust for frame: \(windowFrame) in app: \(targetApp.localizedName ?? "Unknown")")
-    }
-
-    private func getAXAttribute(for element: AXUIElement, attribute: String) -> AXValue? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
-              let axValue = value else {
-            return nil
+        if !resized && !needToMove {
+            return
         }
-        return axValue as! AXValue
+
+        
+        AppLogger.shared.info("Adjusting window for app \(targetApp.localizedName ?? "Unknown") from \(windowFrame) to \(newFrame) on screen \(screen.frame). Resized: \(resized), NeedToMove: \(needToMove)")
+        
+        // Get the application's accessibility element
+        let axApp = AXUIElementCreateApplication(targetApp.processIdentifier)
+        
+        // Get the focused window
+        var focusedWindowRef: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindowRef)
+        
+        if result == .success, let focusedWindow = focusedWindowRef as! AXUIElement? {
+            if resized {
+                if AXUIElementSetAttributeValue(focusedWindow, kAXSizeAttribute as CFString, AXValue.from(value: newFrame.size, type: .cgSize)!) == .success {
+                    AppLogger.shared.info("Successfully adjusted window size.")
+                } else {
+                    AppLogger.shared.error("Failed to adjust window size for app \(targetApp.localizedName ?? "Unknown")")
+                }
+            }
+            
+            if needToMove {
+                if AXUIElementSetAttributeValue(focusedWindow, kAXPositionAttribute as CFString, AXValue.from(value: newFrame.origin, type: .cgPoint)!) == .success {
+                    AppLogger.shared.info("Successfully moved window to new position.")
+                } else {
+                    AppLogger.shared.error("Failed to move window for app \(targetApp.localizedName ?? "Unknown")")
+                }
+            }
+        } else {
+            AppLogger.shared.error("Failed to get focused window for app \(targetApp.localizedName ?? "Unknown")")
+        }
     }
 }
-
-// MARK: - AXValue Helper
 
 extension AXValue {
     static func from(value: CGPoint, type: AXValueType) -> AXValue? {
         var point = value
         return AXValueCreate(type, &point)
+    }
+    
+    static func from(value: CGSize, type: AXValueType) -> AXValue? {
+        var size = value
+        return AXValueCreate(type, &size)
     }
 }
