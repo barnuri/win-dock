@@ -48,19 +48,19 @@ struct WindowsTaskbarIcon: View {
                             ZStack {
                                 Circle()
                                     .fill(Color.red)
-                                    .frame(width: app.notificationCount > 9 ? 16 : 14, height: app.notificationCount > 9 ? 16 : 14)
+                                    .frame(width: app.notificationCount > 9 ? 18 : 16, height: app.notificationCount > 9 ? 18 : 16)
                                     .overlay(
                                         Circle()
                                             .stroke(Color.white, lineWidth: 1.5)
                                     )
                                 
                                 Text(app.notificationCount > 99 ? "99+" : "\(app.notificationCount)")
-                                    .font(.system(size: app.notificationCount > 9 ? 8 : 9, weight: .bold, design: .rounded))
+                                    .font(.system(size: app.notificationCount > 9 ? 7 : 8, weight: .bold, design: .rounded))
                                     .foregroundColor(.white)
                                     .lineLimit(1)
-                                    .minimumScaleFactor(0.6)
+                                    .minimumScaleFactor(0.5)
                             }
-                            .offset(x: 6, y: -6)
+                            .offset(x: 2, y: -2)
                         }
                         Spacer()
                     }

@@ -38,7 +38,7 @@ struct WinDockApp: App {
             // Main content view with minimal size to ensure app is visible in dock
             ZStack {
                 Color.clear
-                    .frame(width: 1, height: 1)
+                    .frame(width: 0, height: 0)
                     .opacity(0.01) // Very slight opacity to keep window registered
 
                 // Hidden helper for SettingsAccess

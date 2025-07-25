@@ -131,7 +131,7 @@ class WindowsResizeManager: ObservableObject {
 
     private func startPeriodicMonitoring() {
         monitoringTimer?.invalidate()
-        monitoringTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+        monitoringTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.resizeAndMoveWindowsIfNeeded()
         }
     }

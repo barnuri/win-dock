@@ -149,7 +149,7 @@ class AppManager: ObservableObject {
             processedBundleIds.insert(bundleId)
             
             let windows = getWindowsForApp(app)
-            let windowCount = windows.filter { !$0.isMinimized }.count
+            let windowCount = windows.count // Count all windows including minimized ones
             let (hasNotifications, notificationCount) = getNotificationInfo(for: app)
 
             let dockApp = DockApp(
@@ -217,8 +217,8 @@ class AppManager: ObservableObject {
     private func getWindowsForApp(_ app: NSRunningApplication) -> [WindowInfo] {
         var windows: [WindowInfo] = []
         
-        // Use Core Graphics to get window information
-        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+        // Use Core Graphics to get window information - include both on-screen and off-screen windows
+        guard let windowList = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
             return windows
         }
         
@@ -233,17 +233,33 @@ class AppManager: ObservableObject {
             let title = windowInfo[kCGWindowName as String] as? String ?? ""
             let isOnScreen = windowInfo[kCGWindowIsOnscreen as String] as? Bool ?? false
             let alpha = windowInfo[kCGWindowAlpha as String] as? CGFloat ?? 1.0
+            let layer = windowInfo[kCGWindowLayer as String] as? Int ?? 0
             
             // Skip windows that are likely not user-visible
-            if bounds.width < 50 || bounds.height < 50 || alpha < 0.1 {
+            // But be more lenient for minimized windows
+            if bounds.width < 50 || bounds.height < 50 {
                 continue
             }
+            
+            // Skip very transparent windows unless they're minimized
+            if alpha < 0.1 && isOnScreen {
+                continue
+            }
+            
+            // Skip system layer windows (like dock, menu bar)
+            if layer < 0 {
+                continue
+            }
+            
+            // Determine if window is minimized
+            // A window is considered minimized if it's not on screen but has reasonable bounds
+            let isMinimized = !isOnScreen && bounds.width >= 50 && bounds.height >= 50
             
             let window = WindowInfo(
                 title: title,
                 windowID: windowID,
                 bounds: bounds,
-                isMinimized: !isOnScreen,
+                isMinimized: isMinimized,
                 isOnScreen: isOnScreen
             )
             
@@ -327,25 +343,65 @@ class AppManager: ObservableObject {
             runningApp.activate(options: [.activateIgnoringOtherApps])
         }
         
-        // If we have a specific window ID, try to focus it
+        // If we have a specific window ID, try to focus it using CGWindow API
         if windowID > 0 {
-            // Use AppleScript to focus the specific window
-            let script = """
-            tell application "System Events"
-                tell process "\(app.name)"
-                    set frontmost to true
-                    try
-                        perform action "AXRaise" of window 1
-                    end try
-                end tell
-            end tell
-            """
-            
-            if let appleScript = NSAppleScript(source: script) {
-                var error: NSDictionary?
-                appleScript.executeAndReturnError(&error)
-                if let error = error {
-                    AppLogger.shared.error("Focus window AppleScript error: \(error)")
+            // Use Core Graphics to get window information and attempt to bring it to front
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                // Try to get window information
+                guard let windowList = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]],
+                      let windowInfo = windowList.first else {
+                    AppLogger.shared.warning("Could not find window with ID \(windowID)")
+                    return
+                }
+                
+                // Check if window belongs to the app
+                if let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
+                   ownerPID == runningApp.processIdentifier {
+                    
+                    // Use AppleScript to focus the specific window by title
+                    if let windowName = windowInfo[kCGWindowName as String] as? String, !windowName.isEmpty {
+                        let script = """
+                        tell application "\(app.name)"
+                            activate
+                            try
+                                set index of window "\(windowName)" to 1
+                            on error
+                                -- Fallback: just activate the app
+                                activate
+                            end try
+                        end tell
+                        """
+                        
+                        if let appleScript = NSAppleScript(source: script) {
+                            var error: NSDictionary?
+                            appleScript.executeAndReturnError(&error)
+                            if let error = error {
+                                AppLogger.shared.error("Focus window AppleScript error: \(error)")
+                            }
+                        }
+                    } else {
+                        // Fallback: use System Events to bring window to front
+                        let script = """
+                        tell application "System Events"
+                            tell process "\(app.name)"
+                                set frontmost to true
+                                try
+                                    perform action "AXRaise" of window 1
+                                end try
+                            end tell
+                        end tell
+                        """
+                        
+                        if let appleScript = NSAppleScript(source: script) {
+                            var error: NSDictionary?
+                            appleScript.executeAndReturnError(&error)
+                            if let error = error {
+                                AppLogger.shared.error("Focus window System Events error: \(error)")
+                            }
+                        }
+                    }
+                } else {
+                    AppLogger.shared.warning("Window \(windowID) does not belong to app \(app.name)")
                 }
             }
         }

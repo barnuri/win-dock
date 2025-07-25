@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ScreenCaptureKit
 
 struct WindowPreviewView: View {
     let app: DockApp
@@ -92,7 +93,10 @@ struct WindowPreviewView: View {
         
         // Use real window information from the app
         for window in app.windows {
-            if let image = captureWindowPreview(for: window) ?? createPlaceholderPreview(for: window, index: previews.count) {
+            // Try to get real window preview first, then fallback to placeholder
+            let image = captureWindowPreview(for: window) ?? createPlaceholderPreview(for: window, index: previews.count)
+            
+            if let image = image {
                 let windowTitle = window.title.isEmpty ? app.name : window.title
                 let preview = WindowPreview(
                     windowID: window.windowID,
@@ -123,47 +127,105 @@ struct WindowPreviewView: View {
     }
     
     private func captureWindowPreview(for window: WindowInfo) -> NSImage? {
-        // For now, return nil to use placeholder - ScreenCaptureKit would be the proper way
-        // but it requires more complex setup and permissions
-        return nil
+        // For now, we'll use a simplified approach without ScreenCaptureKit
+        // since it requires additional permissions and setup
+        // We'll create a better placeholder instead
+        return createPlaceholderPreview(for: window, index: 0)
     }
     
     private func createPlaceholderPreview(for window: WindowInfo?, index: Int) -> NSImage? {
         let image = NSImage(size: NSSize(width: 240, height: 135))
         image.lockFocus()
         
-        // Background with app-specific color
-        let bgColor = NSColor.controlBackgroundColor
-        bgColor.set()
-        NSRect(origin: .zero, size: image.size).fill()
+        // Create a more sophisticated background gradient
+        let bgGradient = NSGradient(colors: [
+            NSColor.controlBackgroundColor,
+            NSColor.controlBackgroundColor.blended(withFraction: 0.1, of: NSColor.systemBlue) ?? NSColor.controlBackgroundColor
+        ])
+        bgGradient?.draw(in: NSRect(origin: .zero, size: image.size), angle: 45)
         
-        // Draw app icon
+        // Draw a subtle border
+        NSColor.separatorColor.setStroke()
+        let borderPath = NSBezierPath(roundedRect: NSRect(x: 1, y: 1, width: image.size.width - 2, height: image.size.height - 2), xRadius: 4, yRadius: 4)
+        borderPath.lineWidth = 1
+        borderPath.stroke()
+        
+        // Draw app icon with shadow
         if let appIcon = app.icon {
             let iconSize = NSSize(width: 40, height: 40)
             let iconRect = NSRect(
                 x: (image.size.width - iconSize.width) / 2,
-                y: (image.size.height - iconSize.height) / 2 + 10,
+                y: (image.size.height - iconSize.height) / 2 + 15,
                 width: iconSize.width,
                 height: iconSize.height
             )
+            
+            // Draw icon shadow
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.3)
+            shadow.shadowOffset = NSSize(width: 0, height: -2)
+            shadow.shadowBlurRadius = 4
+            shadow.set()
+            
             appIcon.draw(in: iconRect)
         }
         
-        // Draw window title
+        // Clear shadow for text
+        let noShadow = NSShadow()
+        noShadow.shadowColor = NSColor.clear
+        noShadow.set()
+        
+        // Draw window info
         let title = window?.title ?? app.name
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12),
+        let windowInfo = window != nil ? 
+            (window!.isMinimized ? "Minimized" : "Active") : 
+            "\(app.windowCount) window\(app.windowCount == 1 ? "" : "s")"
+        
+        // Main title
+        let titleAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
             .foregroundColor: NSColor.labelColor
         ]
-        let attributedTitle = NSAttributedString(string: title, attributes: attributes)
+        let attributedTitle = NSAttributedString(string: title, attributes: titleAttributes)
         let titleSize = attributedTitle.size()
         let titleRect = NSRect(
             x: (image.size.width - titleSize.width) / 2,
-            y: 20,
+            y: 25,
             width: titleSize.width,
             height: titleSize.height
         )
         attributedTitle.draw(in: titleRect)
+        
+        // Window info subtitle
+        let infoAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10),
+            .foregroundColor: NSColor.secondaryLabelColor
+        ]
+        let attributedInfo = NSAttributedString(string: windowInfo, attributes: infoAttributes)
+        let infoSize = attributedInfo.size()
+        let infoRect = NSRect(
+            x: (image.size.width - infoSize.width) / 2,
+            y: 12,
+            width: infoSize.width,
+            height: infoSize.height
+        )
+        attributedInfo.draw(in: infoRect)
+        
+        // Draw window state indicator
+        if let window = window {
+            let indicatorSize: CGFloat = 8
+            let indicatorRect = NSRect(
+                x: image.size.width - indicatorSize - 8,
+                y: image.size.height - indicatorSize - 8,
+                width: indicatorSize,
+                height: indicatorSize
+            )
+            
+            let indicatorColor = window.isMinimized ? NSColor.systemOrange : 
+                                window.isOnScreen ? NSColor.systemGreen : NSColor.systemRed
+            indicatorColor.setFill()
+            NSBezierPath(ovalIn: indicatorRect).fill()
+        }
         
         image.unlockFocus()
         return image
