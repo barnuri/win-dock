@@ -54,7 +54,7 @@ class ReleaseManager:
         self.calculate_new_version(version_type)
         self.update_version_in_plist()
         self.build_app()
-        self.create_dmg()
+        # self.create_dmg()
 
         # Git operations
         self.commit_version_bump()
@@ -137,6 +137,7 @@ class ReleaseManager:
                 patch += 1
 
             self.new_version = f"{major}.{minor}.{patch}"
+            self.tag_name = f"v{self.new_version}"
             print(f"📈 New version: {self.new_version}")
         except Exception as e:
             raise RuntimeError(f"❌ Error calculating new version: {e}")
@@ -337,7 +338,6 @@ class ReleaseManager:
 
     def create_tag(self):
         """Create and push a Git tag for the release."""
-        self.tag_name = f"v{self.new_version}"
         print(f"🏷️ Creating release tag: {self.tag_name}")
 
         if self.dry_run:
@@ -626,15 +626,14 @@ def main():
     release_manager.dry_run = args.dry_run if hasattr(args, "dry_run") else False
     try:
         release_manager.run(args.version_type)
+        print("🚀 Release script completed successfully!")
+        print(f"https://github.com/barnuri/win-dock/releases/tag/{release_manager.tag_name}")
     except Exception as e:
         # revert Info.plist to the original version in case of failure
         print(f"❌ Error during release process: {e}")
         print("Reverting Info.plist to the original version...")
         # use git to reset the file
         subprocess.run(["git", "restore", str(release_manager.info_plist_path)], check=True)
-    print("🚀 Release script completed successfully!")
-    print(f"https://github.com/barnuri/win-dock/releases/tag/{release_manager.tag_name}")
-
 
 if __name__ == "__main__":
     main()
