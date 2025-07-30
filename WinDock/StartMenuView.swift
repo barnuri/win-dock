@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Contacts
 
 struct StartMenuView: View {
     @Environment(\.dismiss) private var dismiss
@@ -7,14 +8,29 @@ struct StartMenuView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
-                Image(systemName: "apple.logo")
-                    .font(.title2)
-                    .foregroundColor(.primary)
-                Text("Start")
-                    .font(.headline)
-                    .fontWeight(.medium)
+            // User Info Header
+            HStack(spacing: 12) {
+                if let profileImage = getUserProfileImage() {
+                    Image(nsImage: profileImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 32, height: 32)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color.accentColor.opacity(0.2), lineWidth: 1))
+                } else {
+                    Image(systemName: "person.crop.circle")
+                        .font(.system(size: 32))
+                        .foregroundColor(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(getUserDisplayName())
+                        .font(.headline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.primary)
+                    Text(NSFullUserName())
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
                 Spacer()
                 Button(action: { dismiss() }) {
                     Image(systemName: "xmark")
@@ -26,7 +42,6 @@ struct StartMenuView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .background(Color(NSColor.controlBackgroundColor))
-            
             Divider()
             
             // Quick Actions
@@ -42,6 +57,23 @@ struct StartMenuView: View {
                         title: "Close All Windows",
                         icon: "xmark.square.fill",
                         action: closeAllWindows
+                    )
+                    Divider()
+                        .padding(.horizontal, 16)
+                    StartMenuButton(
+                        title: "Bluetooth Settings",
+                        icon: "dot.radiowaves.left.and.right",
+                        action: openBluetoothSettings
+                    )
+                    StartMenuButton(
+                        title: "Network Settings",
+                        icon: "network",
+                        action: openNetworkSettings
+                    )
+                    StartMenuButton(
+                        title: "System Settings",
+                        icon: "gear",
+                        action: openSystemSettings
                     )
                     
                     StartMenuButton(
@@ -188,6 +220,51 @@ struct StartMenuView: View {
     }
     
     // MARK: - Actions
+    private func getUserDisplayName() -> String {
+        if #available(macOS 13.0, *) {
+            return NSFullUserName()
+        } else {
+            return NSUserName()
+        }
+    }
+
+    private func getUserProfileImage() -> NSImage? {
+        // Try to get user's profile image from Contacts
+        if let contactImage = fetchUserContactImage() {
+            return contactImage
+        }
+        // Fallback: use generic userAccounts icon
+        return NSImage(named: NSImage.userAccountsName)
+    }
+
+    private func fetchUserContactImage() -> NSImage? {
+        guard let meContact = try? CNContactStore().unifiedMeContactWithKeys(toFetch: [CNContactImageDataKey as CNKeyDescriptor]),
+              let imageData = meContact.imageData,
+              let image = NSImage(data: imageData) else {
+            return nil
+        }
+        return image
+    }
+    private func openBluetoothSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Bluetooth") {
+            NSWorkspace.shared.open(url)
+        }
+        dismiss()
+    }
+
+    private func openNetworkSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.NetworkSettings") {
+            NSWorkspace.shared.open(url)
+        }
+        dismiss()
+    }
+
+    private func openSystemSettings() {
+        if let url = URL(string: "x-apple.systempreferences:") {
+            NSWorkspace.shared.open(url)
+        }
+        dismiss()
+    }
     
     private func closeAllWindows() {
         let script = """

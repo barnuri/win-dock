@@ -1,8 +1,4 @@
 - fix WindowPreviewView to show window preview when mouse over on app
 - show notification badge on dock app icon if there are notifications in top right corner
 - disable resize dock
-- make the battry and date update in the background in all the docks views to make the clock and battery update in real time
-- disable settings notifications
-- add open sounds settings on the volume control in system tray
-- add open bluetooth settings, open network settings, open settings on the start button
-- in the top of the start button add user name and profile picture
+- fix getting profile image of the user
