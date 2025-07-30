@@ -2,3 +2,4 @@
 - show notification badge on dock app icon if there are notifications in top right corner
 - disable resize dock
 - fix getting profile image of the user
+- hide the dock when window is maximized mode
