@@ -438,6 +438,12 @@ struct VolumeDetailsView: View {
                     .foregroundColor(.secondary)
                     .frame(width: 30)
             }
+            Button("Open Sound Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.sound") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            .buttonStyle(.bordered)
         }
         .padding(12)
         .frame(width: 250)

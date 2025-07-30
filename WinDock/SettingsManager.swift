@@ -148,8 +148,6 @@ class SettingsManager: ObservableObject {
             importStatus = "Settings imported successfully from \(url.lastPathComponent)"
             AppLogger.shared.info("Settings imported from: \(url.path)")
             
-            // Notify that settings changed
-            NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: nil)
             
         } catch {
             importStatus = "Failed to import settings: \(error.localizedDescription)"
@@ -179,8 +177,6 @@ class SettingsManager: ObservableObject {
         importStatus = "Settings reset to defaults"
         AppLogger.shared.info("Settings reset to defaults")
         
-        // Notify that settings changed
-        NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: nil)
         
         isProcessing = false
     }
