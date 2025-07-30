@@ -75,6 +75,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         lastPaddingVertical = UserDefaults.standard.double(forKey: "paddingVertical")
         lastPaddingHorizontal = UserDefaults.standard.double(forKey: "paddingHorizontal")
         
+        // Start background update manager for real-time clock and system info
+        Task { @MainActor in
+            BackgroundUpdateManager.shared.startBackgroundUpdates()
+        }
+        
         // Ensure the app shows up in the dock (counteract LSUIElement if needed)
         ensureAppVisibility()
         

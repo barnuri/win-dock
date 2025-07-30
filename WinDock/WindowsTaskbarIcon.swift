@@ -111,15 +111,15 @@ struct WindowsTaskbarIcon: View {
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovering = hovering
-            if hovering && app.isRunning && app.windowCount > 0 {
+            if hovering && app.isRunning {
                 // Cancel any existing timer to prevent multiple timers
                 hoverTimer?.invalidate()
                 hoverTimer = nil
                 
-                // Start new timer for preview delay
-                hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak hoverTimer] _ in
-                    // Only show if this timer wasn't cancelled
-                    if hoverTimer != nil {
+                // Start new timer for preview delay - reduced delay for better responsiveness
+                hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak hoverTimer] _ in
+                    // Only show if this timer wasn't cancelled and still hovering
+                    if hoverTimer != nil && isHovering {
                         showWindowPreview = true
                     }
                 }

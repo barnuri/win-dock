@@ -91,30 +91,46 @@ struct WindowPreviewView: View {
     private func generateWindowPreviews() -> [WindowPreview] {
         var previews: [WindowPreview] = []
         
-        // Use real window information from the app
-        for window in app.windows {
-            // Try to get real window preview first, then fallback to placeholder
-            let image = captureWindowPreview(for: window) ?? createPlaceholderPreview(for: window, index: previews.count)
-            
-            if let image = image {
-                let windowTitle = window.title.isEmpty ? app.name : window.title
-                let preview = WindowPreview(
-                    windowID: window.windowID,
-                    title: windowTitle,
-                    image: image,
-                    bounds: window.bounds,
-                    isMinimized: window.isMinimized
-                )
-                previews.append(preview)
+        // Use real window information from the app if available
+        if !app.windows.isEmpty {
+            for window in app.windows {
+                // Try to get real window preview first, then fallback to placeholder
+                let image = captureWindowPreview(for: window) ?? createPlaceholderPreview(for: window, index: previews.count)
+                
+                if let image = image {
+                    let windowTitle = window.title.isEmpty ? app.name : window.title
+                    let preview = WindowPreview(
+                        windowID: window.windowID,
+                        title: windowTitle,
+                        image: image,
+                        bounds: window.bounds,
+                        isMinimized: window.isMinimized
+                    )
+                    previews.append(preview)
+                }
             }
         }
         
-        // If no windows found but app is running, create a single preview
+        // If no window previews but app is running, create a single app preview
         if previews.isEmpty && app.isRunning {
             if let image = createPlaceholderPreview(for: nil, index: 0) {
                 let preview = WindowPreview(
                     windowID: 0,
                     title: app.name,
+                    image: image,
+                    bounds: CGRect(x: 0, y: 0, width: 800, height: 600),
+                    isMinimized: false
+                )
+                previews.append(preview)
+            }
+        }
+        
+        // If app is not running, show a "launch app" preview
+        if previews.isEmpty && !app.isRunning {
+            if let image = createLaunchPreview() {
+                let preview = WindowPreview(
+                    windowID: 0,
+                    title: "Launch \(app.name)",
                     image: image,
                     bounds: CGRect(x: 0, y: 0, width: 800, height: 600),
                     isMinimized: false
@@ -230,6 +246,85 @@ struct WindowPreviewView: View {
         image.unlockFocus()
         return image
     }
+    
+    private func createLaunchPreview() -> NSImage? {
+        let image = NSImage(size: NSSize(width: 240, height: 135))
+        image.lockFocus()
+        
+        // Create a launch-themed background
+        let bgGradient = NSGradient(colors: [
+            NSColor.systemBlue.withAlphaComponent(0.1),
+            NSColor.systemBlue.withAlphaComponent(0.05)
+        ])
+        bgGradient?.draw(in: NSRect(origin: .zero, size: image.size), angle: 45)
+        
+        // Draw a subtle border
+        NSColor.separatorColor.setStroke()
+        let borderPath = NSBezierPath(roundedRect: NSRect(x: 1, y: 1, width: image.size.width - 2, height: image.size.height - 2), xRadius: 4, yRadius: 4)
+        borderPath.lineWidth = 1
+        borderPath.stroke()
+        
+        // Draw app icon
+        if let appIcon = app.icon {
+            let iconSize = NSSize(width: 48, height: 48)
+            let iconRect = NSRect(
+                x: (image.size.width - iconSize.width) / 2,
+                y: (image.size.height - iconSize.height) / 2 + 10,
+                width: iconSize.width,
+                height: iconSize.height
+            )
+            
+            // Draw icon shadow
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.2)
+            shadow.shadowOffset = NSSize(width: 0, height: -2)
+            shadow.shadowBlurRadius = 4
+            shadow.set()
+            
+            appIcon.draw(in: iconRect)
+        }
+        
+        // Clear shadow for text
+        let noShadow = NSShadow()
+        noShadow.shadowColor = NSColor.clear
+        noShadow.set()
+        
+        // Draw launch info
+        let launchText = "Click to launch"
+        
+        // Main title
+        let titleAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: NSColor.labelColor
+        ]
+        let attributedTitle = NSAttributedString(string: app.name, attributes: titleAttributes)
+        let titleSize = attributedTitle.size()
+        let titleRect = NSRect(
+            x: (image.size.width - titleSize.width) / 2,
+            y: 25,
+            width: titleSize.width,
+            height: titleSize.height
+        )
+        attributedTitle.draw(in: titleRect)
+        
+        // Launch instruction
+        let infoAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10),
+            .foregroundColor: NSColor.systemBlue
+        ]
+        let attributedInfo = NSAttributedString(string: launchText, attributes: infoAttributes)
+        let infoSize = attributedInfo.size()
+        let infoRect = NSRect(
+            x: (image.size.width - infoSize.width) / 2,
+            y: 12,
+            width: infoSize.width,
+            height: infoSize.height
+        )
+        attributedInfo.draw(in: infoRect)
+        
+        image.unlockFocus()
+        return image
+    }
 }
 
 struct WindowPreview {
@@ -326,7 +421,15 @@ struct WindowPreviewItem: View {
     }
     
     private func focusWindow() {
-        appManager.focusWindow(windowID: preview.windowID, app: app)
+        if preview.windowID > 0 {
+            appManager.focusWindow(windowID: preview.windowID, app: app)
+        } else if !app.isRunning {
+            // Launch the app if it's not running
+            appManager.activateApp(app)
+        } else {
+            // Bring the app to front if it's running but has no specific window
+            appManager.activateApp(app)
+        }
     }
     
     private func closeWindow() {

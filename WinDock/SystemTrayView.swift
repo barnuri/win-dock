@@ -33,46 +33,38 @@ enum DateFormat: String, CaseIterable {
 }
 
 struct SystemTrayView: View {
-    @State private var currentTime = Date()
-    @State private var batteryInfo = BatteryInfo()
-    @State private var networkInfo = NetworkInfo()
+    @StateObject private var backgroundUpdateManager = BackgroundUpdateManager.shared
     @AppStorage("use24HourClock") private var use24HourClock = true
     @AppStorage("showSystemTray") private var showSystemTray = true
     @AppStorage("dateFormat") private var dateFormat: DateFormat = .ddMMyyyy
-    
-    private let timer = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     
     var body: some View {
         if showSystemTray {
             HStack(spacing: 8) {
                 // Battery indicator (if laptop)
-                if batteryInfo.isPresent {
-                    BatteryIndicatorView(batteryInfo: batteryInfo)
+                if backgroundUpdateManager.batteryInfo.isPresent {
+                    BatteryIndicatorView(batteryInfo: backgroundUpdateManager.batteryInfo)
                 }
                 
                 // Network indicator
-                NetworkIndicatorView(networkInfo: networkInfo)
+                NetworkIndicatorView(networkInfo: backgroundUpdateManager.networkInfo)
                 
                 // Volume indicator
                 VolumeIndicatorView()
                 
                 // Date and time
-                DateTimeView(currentTime: currentTime, use24HourClock: use24HourClock, dateFormat: dateFormat)
+                DateTimeView(
+                    currentTime: backgroundUpdateManager.currentTime,
+                    use24HourClock: use24HourClock,
+                    dateFormat: dateFormat
+                )
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(Color.clear)
-            .onReceive(timer) { _ in
-                currentTime = Date()
-                batteryInfo.update()
-                networkInfo.update()
-            }
             .onAppear {
-                batteryInfo.update()
-                networkInfo.start()
-            }
-            .onDisappear {
-                networkInfo.stop()
+                // Background updates are already running globally
+                AppLogger.shared.info("SystemTrayView appeared - using background updates")
             }
         }
     }

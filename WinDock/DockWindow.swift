@@ -48,6 +48,10 @@ class DockWindow: NSPanel {
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
         
+        // Disable resizing
+        minSize = NSSize(width: 100, height: 54)
+        maxSize = NSSize(width: NSScreen.main?.frame.width ?? 1920, height: 54)
+        
         // Enhanced accessibility and app switcher support
         self.setAccessibilityTitle("WinDock Taskbar")
         self.setAccessibilityRole(.application)
@@ -219,6 +223,21 @@ class DockWindow: NSPanel {
               let screen = showOnAllSpaces ? NSScreen.main : NSScreen.screens.first else { return }
         let newFrame = dockFrame(for: appDelegate.dockPosition, screen: screen)
         setFrame(newFrame, display: true, animate: false)
+        
+        // Update size constraints based on dock position
+        let dockHeight = getDockHeight()
+        if appDelegate.dockPosition == .left || appDelegate.dockPosition == .right {
+            // Vertical dock (disable resize)
+            let size = NSSize(width: dockHeight, height: screen.frame.height)
+            minSize = size
+            maxSize = size
+        } else {
+            // Horizontal dock (disable resize)
+            let size = NSSize(width: screen.frame.width, height: dockHeight)
+            minSize = size
+            maxSize = size
+        }
+        
         setupTrackingArea()
     }
     
