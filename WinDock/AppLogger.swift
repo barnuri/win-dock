@@ -3,7 +3,7 @@ import AppKit
 
 final class AppLogger {
     // Enum to represent log levels
-    enum LogLevel: String {
+    enum LogLevel: String, CaseIterable {
         case debug = "DEBUG"
         case info = "INFO"
         case warning = "WARNING"
@@ -18,6 +18,20 @@ final class AppLogger {
             case .error: return "❌"
             case .critical: return "🔥"
             }
+        }
+        
+        var priority: Int {
+            switch self {
+            case .debug: return 0
+            case .info: return 1
+            case .warning: return 2
+            case .error: return 3
+            case .critical: return 4
+            }
+        }
+        
+        func shouldLog(minimumLevel: LogLevel) -> Bool {
+            return self.priority >= minimumLevel.priority
         }
     }
     
@@ -42,6 +56,10 @@ final class AppLogger {
     // Configuration
     private let enableConsoleLogs = true
     private let maxLogFileSizeBytes = 10 * 1024 * 1024 // 10 MB
+    private var minimumLogLevel: LogLevel {
+        let levelString = UserDefaults.standard.string(forKey: "logLevel") ?? "info"
+        return LogLevel(rawValue: levelString.uppercased()) ?? .info
+    }
     
     private init() {
         // Set up log directory
@@ -66,21 +84,25 @@ final class AppLogger {
     // MARK: - Public Logging Methods
     
     func debug(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
+        guard LogLevel.debug.shouldLog(minimumLevel: minimumLogLevel) else { return }
         let fileInfo = extractFileName(from: file)
         let formattedMessage = "\(fileInfo):\(line) - \(function) - \(message)"
         write(formattedMessage, level: .debug, to: debugFileURL, includeConsole: true)
     }
     
     func info(_ message: String) {
+        guard LogLevel.info.shouldLog(minimumLevel: minimumLogLevel) else { return }
         write(message, level: .info, to: logFileURL)
     }
     
     func warning(_ message: String) {
+        guard LogLevel.warning.shouldLog(minimumLevel: minimumLogLevel) else { return }
         write(message, level: .warning, to: logFileURL)
         write(message, level: .warning, to: errorFileURL)
     }
     
     func error(_ message: String, error: Error? = nil) {
+        guard LogLevel.error.shouldLog(minimumLevel: minimumLogLevel) else { return }
         var fullMessage = message
         if let error = error {
             fullMessage += " - Error: \(error.localizedDescription)"
@@ -90,6 +112,7 @@ final class AppLogger {
     }
     
     func critical(_ message: String, error: Error? = nil) {
+        guard LogLevel.critical.shouldLog(minimumLevel: minimumLogLevel) else { return }
         var fullMessage = message
         if let error = error {
             fullMessage += " - Error: \(error.localizedDescription)"

@@ -111,7 +111,7 @@ struct WindowsTaskbarIcon: View {
         .contentShape(Rectangle())
         .onHover { hovering in
             isHovering = hovering
-            if hovering && app.isRunning {
+            if hovering && app.isRunning && app.windowCount > 0 {
                 // Cancel any existing timer to prevent multiple timers
                 hoverTimer?.invalidate()
                 hoverTimer = nil

@@ -2,6 +2,7 @@ import CoreGraphics
 import Darwin
 import SwiftUI
 import AppKit
+import Combine
 #if canImport(IOKit)
 import IOKit
 #endif
@@ -27,6 +28,8 @@ class DockWindow: NSPanel {
     private var hideTimer: Timer?
     private var trackingArea: NSTrackingArea?
     private var dockView: NSHostingView<DockView>?
+    private var cancellables = Set<AnyCancellable>()
+    private let fullscreenManager = FullscreenDetectionManager.shared
     
     convenience init() {
         self.init(contentRect: NSRect(x: 0, y: 0, width: 100, height: 60),
@@ -48,9 +51,13 @@ class DockWindow: NSPanel {
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
         
-        // Disable resizing
-        minSize = NSSize(width: 100, height: 54)
-        maxSize = NSSize(width: NSScreen.main?.frame.width ?? 1920, height: 54)
+        // Completely disable resizing - make window non-resizable
+        styleMask.remove(.resizable)
+        
+        // Set fixed size constraints
+        let dockHeight = getDockHeight()
+        minSize = NSSize(width: 100, height: dockHeight)
+        maxSize = NSSize(width: NSScreen.main?.frame.width ?? 1920, height: dockHeight)
         
         // Enhanced accessibility and app switcher support
         self.setAccessibilityTitle("WinDock Taskbar")
@@ -65,6 +72,17 @@ class DockWindow: NSPanel {
         
         updatePosition()
         appManager.startMonitoring()
+        
+        // Start fullscreen detection for auto-hide functionality
+        fullscreenManager.startMonitoring()
+        
+        // Subscribe to fullscreen state changes
+        fullscreenManager.$hasFullscreenWindow
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] hasFullscreen in
+                self?.handleFullscreenStateChange(hasFullscreen)
+            }
+            .store(in: &cancellables)
 
         NotificationCenter.default.addObserver(
             self,
@@ -86,8 +104,26 @@ class DockWindow: NSPanel {
 
         setupDockView()
         setupTrackingArea()
-
-    // Always solid background, do not set alphaValue
+    }
+    
+    private func handleFullscreenStateChange(_ hasFullscreen: Bool) {
+        if hasFullscreen {
+            // Hide dock when there's a fullscreen window
+            hideTimer?.invalidate()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.3
+                self.animator().alphaValue = 0.0
+            }
+            // AppLogger.shared.info("Dock hidden due to fullscreen window")
+        } else {
+            // Show dock when no fullscreen windows
+            hideTimer?.invalidate()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.3
+                self.animator().alphaValue = autoHide ? 0.0 : 1.0
+            }
+            // AppLogger.shared.info("Dock shown - no fullscreen windows")
+        }
     }
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
@@ -243,6 +279,8 @@ class DockWindow: NSPanel {
     
     func cleanup() {
         appManager.stopMonitoring()
+        fullscreenManager.stopMonitoring()
+        cancellables.removeAll()
     }
     
     func show() {
@@ -256,6 +294,7 @@ class DockWindow: NSPanel {
             if let observer = windowObserver {
                 NotificationCenter.default.removeObserver(observer)
             }
+            cleanup()
         }
     }
 }

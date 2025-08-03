@@ -238,7 +238,37 @@ struct StartMenuView: View {
     }
 
     private func fetchUserContactImage() -> NSImage? {
-        guard let meContact = try? CNContactStore().unifiedMeContactWithKeys(toFetch: [CNContactImageDataKey as CNKeyDescriptor]),
+        let store = CNContactStore()
+        
+        // Check authorization status first
+        let authorizationStatus = CNContactStore.authorizationStatus(for: .contacts)
+        
+        switch authorizationStatus {
+        case .authorized:
+            // Permission granted, proceed with access
+            break
+        case .notDetermined:
+            // Permission not yet requested - request it synchronously for this use case
+            var granted = false
+            let semaphore = DispatchSemaphore(value: 0)
+            
+            store.requestAccess(for: .contacts) { success, error in
+                granted = success
+                semaphore.signal()
+            }
+            
+            semaphore.wait()
+            
+            if !granted {
+                return nil
+            }
+        case .denied, .restricted:
+            return nil
+        @unknown default:
+            return nil
+        }
+        
+        guard let meContact = try? store.unifiedMeContactWithKeys(toFetch: [CNContactImageDataKey as CNKeyDescriptor]),
               let imageData = meContact.imageData,
               let image = NSImage(data: imageData) else {
             return nil

@@ -425,30 +425,58 @@ struct AppsSettingsTab: View {
 }
 
 struct LogsSettingsTab: View {
+    @AppStorage("logLevel") private var logLevel: String = "info"
     private var logsDirectory: URL { AppLogger.shared.logsDirectory }
     private var appLogFile: URL { logsDirectory.appendingPathComponent("app.log") }
     private var errorsLogFile: URL { logsDirectory.appendingPathComponent("errors.log") }
+    private var debugLogFile: URL { logsDirectory.appendingPathComponent("debug.log") }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Logs")
-                .font(.headline)
+        Form {
+            logLevelSection
+            logFilesSection
+            logInformationSection
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+    }
+    
+    private var logLevelSection: some View {
+        Section("Log Level") {
+            Picker("Minimum Log Level:", selection: $logLevel) {
+                Text("Debug").tag("debug")
+                Text("Info").tag("info") 
+                Text("Warning").tag("warning")
+                Text("Error").tag("error")
+                Text("Critical").tag("critical")
+            }
+            .pickerStyle(.segmented)
             
-            Text("Log files location:")
-                .font(.subheadline)
-            
-            Text(logsDirectory.path)
-                .font(.system(size: 12, design: .monospaced))
+            Text(logLevelDescription)
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .padding(8)
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(6)
+                .font(.caption)
+        }
+    }
+    
+    private var logFilesSection: some View {
+        Section("Log Files") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Log files location:")
+                    .font(.subheadline)
+                
+                Text(logsDirectory.path)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .padding(8)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(6)
+            }
             
             HStack(spacing: 12) {
                 Button("Open Logs Folder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([logsDirectory])
+                    AppLogger.shared.showLogsInFinder()
                 }
                 .buttonStyle(.bordered)
                 
@@ -463,21 +491,46 @@ struct LogsSettingsTab: View {
                 .buttonStyle(.bordered)
             }
             
-            Divider()
-            
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Log Information:")
-                    .font(.subheadline)
+            HStack(spacing: 12) {
+                Button("View debug.log") {
+                    NSWorkspace.shared.open(debugLogFile)
+                }
+                .buttonStyle(.bordered)
+                .disabled(logLevel == "info" || logLevel == "warning" || logLevel == "error" || logLevel == "critical")
                 
-                Label("App events and actions are logged to app.log", systemImage: "doc.text")
-                Label("Errors and warnings are logged to errors.log", systemImage: "exclamationmark.triangle")
+                Spacer()
+            }
+        }
+    }
+    
+    private var logInformationSection: some View {
+        Section("Log Information") {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("General app events are logged to app.log", systemImage: "doc.text")
+                Label("Errors and warnings are logged to errors.log", systemImage: "exclamationmark.triangle") 
+                Label("Debug information is logged to debug.log", systemImage: "ladybug")
+                Label("Log files are automatically rotated when they exceed 10MB", systemImage: "arrow.clockwise")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-            
-            Spacer()
         }
-        .padding()
+    }
+    
+    private var logLevelDescription: String {
+        switch logLevel {
+        case "debug":
+            return "Shows all messages including detailed debug information. Useful for troubleshooting."
+        case "info":
+            return "Shows general information, warnings, errors, and critical messages. Recommended for normal use."
+        case "warning":
+            return "Shows warnings, errors, and critical messages only."
+        case "error":
+            return "Shows only errors and critical messages."
+        case "critical":
+            return "Shows only critical error messages."
+        default:
+            return "Shows general information and above."
+        }
     }
 }
 

@@ -34,6 +34,7 @@ enum DateFormat: String, CaseIterable {
 
 struct SystemTrayView: View {
     @StateObject private var backgroundUpdateManager = BackgroundUpdateManager.shared
+    @StateObject private var userProfileManager = UserProfileManager.shared
     @AppStorage("use24HourClock") private var use24HourClock = true
     @AppStorage("showSystemTray") private var showSystemTray = true
     @AppStorage("dateFormat") private var dateFormat: DateFormat = .ddMMyyyy
@@ -58,6 +59,9 @@ struct SystemTrayView: View {
                     use24HourClock: use24HourClock,
                     dateFormat: dateFormat
                 )
+                
+                // User profile image
+                UserProfileView(userProfileManager: userProfileManager)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -545,6 +549,123 @@ struct CalendarView: View {
         formatter.dateStyle = .full
         formatter.timeStyle = .none
         return formatter.string(from: currentDate)
+    }
+}
+
+struct UserProfileView: View {
+    @ObservedObject var userProfileManager: UserProfileManager
+    @State private var showingProfileMenu = false
+    
+    var body: some View {
+        Button(action: {
+            showingProfileMenu.toggle()
+        }) {
+            Group {
+                if let profileImage = userProfileManager.userProfileImage {
+                    Image(nsImage: profileImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 24, height: 24)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.primary.opacity(0.2), lineWidth: 1)
+                        )
+                } else {
+                    Image(systemName: "person.circle.fill")
+                        .font(.system(size: 24))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showingProfileMenu, arrowEdge: .bottom) {
+            UserProfilePopover(userProfileManager: userProfileManager)
+        }
+        .help("User Profile")
+        .onAppear {
+            // Load profile when view appears
+            userProfileManager.loadUserProfile()
+        }
+    }
+}
+
+struct UserProfilePopover: View {
+    @ObservedObject var userProfileManager: UserProfileManager
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            // Profile image and name
+            VStack(spacing: 8) {
+                if let profileImage = userProfileManager.userProfileImage {
+                    Image(nsImage: profileImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 64, height: 64)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.primary.opacity(0.2), lineWidth: 2)
+                        )
+                } else {
+                    Image(systemName: "person.circle.fill")
+                        .font(.system(size: 64))
+                        .foregroundColor(.secondary)
+                }
+                
+                VStack(spacing: 2) {
+                    Text(userProfileManager.userName.isEmpty ? NSUserName() : userProfileManager.userName)
+                        .font(.headline)
+                        .lineLimit(1)
+                    
+                    Text("@\(NSUserName())")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            Divider()
+            
+            // Quick actions
+            VStack(spacing: 4) {
+                Button("System Preferences") {
+                    if let url = URL(string: "x-apple.systempreferences:") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.bordered)
+                
+                Button("Users & Groups") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preferences.users") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.bordered)
+                
+                Divider()
+                
+                Button("Lock Screen") {
+                    lockScreen()
+                }
+                .buttonStyle(.bordered)
+                
+                Button("Sign Out") {
+                    let script = """
+                    tell application "System Events"
+                        log out
+                    end tell
+                    """
+                    
+                    if let appleScript = NSAppleScript(source: script) {
+                        var error: NSDictionary?
+                        appleScript.executeAndReturnError(&error)
+                    }
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(16)
+        .frame(width: 200)
     }
 }
 

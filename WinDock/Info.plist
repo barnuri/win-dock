@@ -16,6 +16,10 @@
 	<false/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSContactsUsageDescription</key>
+	<string>WinDock can optionally access your Contacts to display your profile picture and name in the start menu. This access is optional and the app will work without it.</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>WinDock uses accessibility features to detect notification badges from other applications and to provide window management functionality. This helps display accurate notification counts in the dock.</string>
 	<key>NSSupportsAutomaticTermination</key>
 	<true/>
 	<key>NSSupportsSuddenTermination</key>

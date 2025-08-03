@@ -19,6 +19,7 @@ struct AppSettings: Codable {
     var searchAppChoice: String = "spotlight"
     var defaultBrowser: String = "com.apple.Safari"
     var defaultTerminal: String = "com.apple.Terminal"
+    var logLevel: String = "info"
     
     // Additional settings can be added here
     var exportDate: Date = Date()
@@ -51,6 +52,7 @@ class SettingsManager: ObservableObject {
             searchAppChoice: userDefaults.string(forKey: "searchAppChoice") ?? "spotlight",
             defaultBrowser: userDefaults.string(forKey: "defaultBrowser") ?? "com.apple.Safari",
             defaultTerminal: userDefaults.string(forKey: "defaultTerminal") ?? "com.apple.Terminal",
+            logLevel: userDefaults.string(forKey: "logLevel") ?? "info",
             exportDate: Date(),
             version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         )
@@ -141,6 +143,7 @@ class SettingsManager: ObservableObject {
             userDefaults.set(settings.searchAppChoice, forKey: "searchAppChoice")
             userDefaults.set(settings.defaultBrowser, forKey: "defaultBrowser")
             userDefaults.set(settings.defaultTerminal, forKey: "defaultTerminal")
+            userDefaults.set(settings.logLevel, forKey: "logLevel")
             
             // Synchronize UserDefaults
             userDefaults.synchronize()
@@ -165,7 +168,7 @@ class SettingsManager: ObservableObject {
             "dockPosition", "dockSize", "autoHide", "showOnAllSpaces", "centerTaskbarIcons",
             "showSystemTray", "showTaskView", "combineTaskbarButtons", "useSmallTaskbarButtons",
             "taskbarTransparency", "showLabels", "animationSpeed", "use24HourClock", "dateFormat",
-            "searchAppChoice", "defaultBrowser", "defaultTerminal"
+            "searchAppChoice", "defaultBrowser", "defaultTerminal", "logLevel"
         ]
         
         for key in keys {

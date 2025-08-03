@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import Combine
 import Accessibility
+import ApplicationServices
 
 struct DockApp: Identifiable, Hashable {
     let id = UUID()
@@ -235,38 +236,107 @@ class AppManager: ObservableObject {
             let alpha = windowInfo[kCGWindowAlpha as String] as? CGFloat ?? 1.0
             let layer = windowInfo[kCGWindowLayer as String] as? Int ?? 0
             
-            // Skip windows that are likely not user-visible
-            // But be more lenient for minimized windows
-            if bounds.width < 50 || bounds.height < 50 {
-                continue
-            }
-            
-            // Skip very transparent windows unless they're minimized
-            if alpha < 0.1 && isOnScreen {
-                continue
-            }
-            
-            // Skip system layer windows (like dock, menu bar)
-            if layer < 0 {
-                continue
-            }
-            
-            // Determine if window is minimized
-            // A window is considered minimized if it's not on screen but has reasonable bounds
-            let isMinimized = !isOnScreen && bounds.width >= 50 && bounds.height >= 50
-            
-            let window = WindowInfo(
-                title: title,
-                windowID: windowID,
+            // Filter out system windows, splash screens, and other non-user windows
+            if shouldIncludeWindow(
                 bounds: bounds,
-                isMinimized: isMinimized,
-                isOnScreen: isOnScreen
-            )
-            
-            windows.append(window)
+                title: title,
+                isOnScreen: isOnScreen,
+                alpha: alpha,
+                layer: layer,
+                app: app
+            ) {
+                // Determine if window is minimized
+                // A window is considered minimized if it's not on screen but has reasonable bounds
+                let isMinimized = !isOnScreen && bounds.width >= 100 && bounds.height >= 100
+                
+                let window = WindowInfo(
+                    title: title,
+                    windowID: windowID,
+                    bounds: bounds,
+                    isMinimized: isMinimized,
+                    isOnScreen: isOnScreen
+                )
+                
+                windows.append(window)
+            }
         }
         
         return windows
+    }
+    
+    private func shouldIncludeWindow(
+        bounds: CGRect,
+        title: String,
+        isOnScreen: Bool,
+        alpha: CGFloat,
+        layer: Int,
+        app: NSRunningApplication
+    ) -> Bool {
+        // Skip windows that are too small to be real user windows
+        if bounds.width < 100 || bounds.height < 100 {
+            return false
+        }
+        
+        // Skip very transparent windows unless they're minimized
+        if alpha < 0.1 && isOnScreen {
+            return false
+        }
+        
+        // Skip system layer windows (like dock, menu bar)
+        if layer < 0 {
+            return false
+        }
+        
+        // Skip certain window types that are commonly not user-visible
+        let excludedTitles = [
+            "Window",
+            "TouchBarUserInterfaceLayoutViewController",
+            "NSToolbarFullScreenWindow",
+            "NSTextInputWindowController",
+            "StatusBarWindow",
+            "NotificationWindow",
+            "ScreenSaverWindow"
+        ]
+        
+        for excluded in excludedTitles {
+            if title.contains(excluded) {
+                return false
+            }
+        }
+        
+        // Skip splash screens and loading windows (usually small and temporary)
+        if title.lowercased().contains("splash") || 
+           title.lowercased().contains("loading") ||
+           title.lowercased().contains("launcher") {
+            return false
+        }
+        
+        // Special handling for specific apps
+        if let bundleId = app.bundleIdentifier {
+            switch bundleId {
+            case "com.apple.finder":
+                // Only count Finder windows that are actual folder windows
+                return !title.isEmpty && title != "Desktop"
+                
+            case "com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox":
+                // For browsers, count all reasonably sized windows
+                return bounds.width >= 200 && bounds.height >= 200
+                
+            case "com.apple.dock":
+                // Never count dock windows
+                return false
+                
+            case "com.apple.systempreferences":
+                // Count System Preferences windows
+                return !title.isEmpty
+                
+            default:
+                break
+            }
+        }
+        
+        // Include windows that are either on-screen or minimized with a reasonable size
+        return isOnScreen || (!isOnScreen && bounds.width >= 200 && bounds.height >= 150)
     }
     
 
@@ -596,6 +666,7 @@ class AppManager: ObservableObject {
             "com.slack.client",
             "com.tinyspeck.slackmacgap",
             "com.microsoft.teams",
+            "com.microsoft.teams2", // Teams 2.0
             "com.discord.discord",
             "com.apple.facetime",
             "com.whatsapp.WhatsApp",
@@ -607,8 +678,13 @@ class AppManager: ObservableObject {
             "com.apple.Console"
         ]
         
-        // Only show notifications for known notification-capable apps
+        // Show notifications for known notification-capable apps
         let hasNotifications = notificationCapableApps.contains(bundleIdentifier) && notificationCount > 0
+        
+        // Debug logging for Teams specifically
+        if bundleIdentifier == "com.microsoft.teams" || bundleIdentifier == "com.microsoft.teams2" {
+            AppLogger.shared.debug("Teams notification check: count=\(notificationCount), hasNotifications=\(hasNotifications)")
+        }
         
         return (hasNotifications, notificationCount)
     }
@@ -635,7 +711,7 @@ class AppManager: ObservableObject {
             return getMessagesNotificationCount()
         case "com.slack.client", "com.tinyspeck.slackmacgap":
             return getSlackNotificationCount()
-        case "com.microsoft.teams":
+        case "com.microsoft.teams", "com.microsoft.teams2":
             return getTeamsNotificationCount()
         case "com.apple.AppStore":
             return getAppStoreNotificationCount()
@@ -748,21 +824,52 @@ class AppManager: ObservableObject {
     }
     
     private func getTeamsNotificationCount() -> Int {
-        // Microsoft Teams often shows notifications in the window title
+        AppLogger.shared.debug("Getting Teams notification count...")
+        
+        // Method 1: Simple window title check (most reliable for Teams)
         let script = """
         tell application "System Events"
             try
                 tell process "Microsoft Teams"
-                    set windowTitle to title of first window
-                    if windowTitle contains "(" then
-                        set AppleScript's text item delimiters to "("
-                        set badgeText to text item 2 of windowTitle
-                        set AppleScript's text item delimiters to ")"
-                        set badgeNumber to text item 1 of badgeText
-                        return badgeNumber as integer
+                    if exists window 1 then
+                        set windowTitle to title of window 1
+                        log "Teams window title: " & windowTitle
+                        
+                        -- Look for patterns like "Microsoft Teams (2)" or "Teams (5)"
+                        if windowTitle contains "(" and windowTitle contains ")" then
+                            set AppleScript's text item delimiters to "("
+                            set titleParts to text items of windowTitle
+                            if (count of titleParts) > 1 then
+                                set badgePart to text item 2 of titleParts
+                                set AppleScript's text item delimiters to ")"
+                                set badgeNum to text item 1 of badgePart
+                                set AppleScript's text item delimiters to ""
+                                try
+                                    set notificationCount to badgeNum as integer
+                                    if notificationCount > 0 then
+                                        log "Found Teams notifications: " & (notificationCount as string)
+                                        return notificationCount
+                                    end if
+                                on error
+                                    log "Error parsing badge number: " & badgeNum
+                                end try
+                            end if
+                        end if
+                        
+                        -- Look for other notification indicators in title
+                        if windowTitle contains "notification" or windowTitle contains "unread" or windowTitle contains "message" then
+                            log "Found Teams notification indicator in title"
+                            return 1
+                        end if
+                        
+                        return 0
+                    else
+                        log "No Teams window found"
+                        return 0
                     end if
                 end tell
-            on error
+            on error errMsg
+                log "Teams notification check error: " & errMsg
                 return 0
             end try
         end tell
@@ -771,11 +878,18 @@ class AppManager: ObservableObject {
         if let appleScript = NSAppleScript(source: script) {
             var error: NSDictionary?
             let result = appleScript.executeAndReturnError(&error)
-            if error == nil {
-                return result.int32Value > 0 ? Int(result.int32Value) : 0
+            
+            if let error = error {
+                AppLogger.shared.error("Teams AppleScript error: \(error)")
+                return 0
             }
+            
+            let count = Int(result.int32Value)
+            AppLogger.shared.debug("Teams notification count from AppleScript: \(count)")
+            return count > 0 ? count : 0
         }
         
+        AppLogger.shared.debug("Teams notification count: 0 (no script result)")
         return 0
     }
     
@@ -812,6 +926,9 @@ class AppManager: ObservableObject {
         // This is a simplified check - in a real implementation, you'd use private APIs
         // or notification center integrations
         
+        // For testing: check if debug mode is enabled for notifications
+        let debugMode = UserDefaults.standard.bool(forKey: "debugNotifications")
+        
         // For apps that commonly show notifications, simulate occasional notifications
         let commonNotificationApps: Set<String> = [
             "com.discord.discord",
@@ -820,6 +937,13 @@ class AppManager: ObservableObject {
             "org.signal.Signal",
             "com.spotify.client"
         ]
+        
+        // Debug mode: simulate Teams notifications for testing
+        if debugMode && (bundleIdentifier == "com.microsoft.teams" || bundleIdentifier == "com.microsoft.teams2") {
+            let simulatedCount = Int.random(in: 1...9)
+            AppLogger.shared.debug("Debug mode: simulating \(simulatedCount) Teams notifications")
+            return simulatedCount
+        }
         
         if commonNotificationApps.contains(bundleIdentifier) {
             // Simulate realistic notification patterns

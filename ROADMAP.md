@@ -1,5 +1,4 @@
 - fix WindowPreviewView to show window preview when mouse over on app
 - show notification badge on dock app icon if there are notifications in top right corner
-- disable resize dock
 - fix getting profile image of the user
-- hide the dock when window is maximized mode
+- fix the windows count badge to show correct number of windows

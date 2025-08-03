@@ -23,6 +23,10 @@ class WindowsResizeManager: ObservableObject {
     private var dockAreas: [NSScreen: CGRect] = [:]
     private var dockPosition: DockPosition = .bottom
     private var monitoringTimer: Timer?
+    
+    // References to other managers for state checking
+    private let fullscreenManager = FullscreenDetectionManager.shared
+    private let macOSDockManager = MacOSDockManager()
 
     // MARK: - Lifecycle & Running Control
 
@@ -135,10 +139,36 @@ class WindowsResizeManager: ObservableObject {
             self?.resizeAndMoveWindowsIfNeeded()
         }
     }
+    
+    /// Checks if window resizing should be disabled based on dock hiding or fullscreen state
+    private func shouldDisableResizing() -> Bool {
+        // Check if WinDock auto-hide is enabled and dock is currently hidden
+        let autoHide = UserDefaults.standard.bool(forKey: "autoHide")
+        
+        // Check if there's a fullscreen window
+        let hasFullscreenWindow = fullscreenManager.hasFullscreenWindow
+               
+        if autoHide {
+            AppLogger.shared.debug("Window resizing disabled: WinDock auto-hide is enabled")
+            return true
+        }
+        
+        if hasFullscreenWindow {
+            AppLogger.shared.debug("Window resizing disabled: Fullscreen window detected")
+            return true
+        }
+        
+        return false
+    }
 
     func resizeAndMoveWindowsIfNeeded() {
         guard isRunning, !dockAreas.isEmpty else {
             AppLogger.shared.warning("WindowsResizeManager is not running or dock areas are empty.")
+            return
+        }
+        
+        // Check if resizing should be disabled
+        if shouldDisableResizing() {
             return
         }
 

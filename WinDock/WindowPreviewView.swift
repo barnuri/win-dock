@@ -143,9 +143,10 @@ struct WindowPreviewView: View {
     }
     
     private func captureWindowPreview(for window: WindowInfo) -> NSImage? {
-        // For now, we'll use a simplified approach without ScreenCaptureKit
-        // since it requires additional permissions and setup
-        // We'll create a better placeholder instead
+        // Note: CGWindowListCreateImage is deprecated in favor of ScreenCaptureKit
+        // For now, we'll use the placeholder approach until ScreenCaptureKit is properly implemented
+        // ScreenCaptureKit requires additional permissions and more complex setup
+        
         return createPlaceholderPreview(for: window, index: 0)
     }
     
