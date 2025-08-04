@@ -7,6 +7,7 @@ class FullscreenDetectionManager: ObservableObject {
     @Published private(set) var hasFullscreenWindow = false
     private var monitoringTimer: Timer?
     private var isRunning = false
+    private var startupTime: Date?
     
     private init() {}
     
@@ -14,9 +15,10 @@ class FullscreenDetectionManager: ObservableObject {
         guard !isRunning else { return }
         
         isRunning = true
+        startupTime = Date()
         
         // Add delay to prevent false positives during startup
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
             // Reduce frequency from 1.0s to 3.0s for better performance
             self.monitoringTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
                 self?.checkForFullscreenWindows()
@@ -70,6 +72,11 @@ class FullscreenDetectionManager: ObservableObject {
     }
     
     private func checkForFullscreenWindows() {
+        // Skip detection for the first 10 seconds after startup to avoid false positives
+        if let startupTime = startupTime, Date().timeIntervalSince(startupTime) < 10.0 {
+            return
+        }
+        
         let previousState = hasFullscreenWindow
         hasFullscreenWindow = detectFullscreenWindow()
         
