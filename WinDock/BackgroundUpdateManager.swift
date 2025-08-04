@@ -12,10 +12,8 @@ class BackgroundUpdateManager: ObservableObject {
     @Published var batteryInfo = BatteryInfo()
     @Published var networkInfo = NetworkInfo()
     
-    private var updateTimer: Timer?
-    private let batteryTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect() // Battery every 30s
-    private let timeTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect() // Time every second
     private var cancellables = Set<AnyCancellable>()
+    private let backgroundQueue = DispatchQueue(label: "background.updates", qos: .utility)
     
     private init() {
         startBackgroundUpdates()
@@ -24,26 +22,48 @@ class BackgroundUpdateManager: ObservableObject {
     func startBackgroundUpdates() {
         AppLogger.shared.info("BackgroundUpdateManager: Starting background updates")
         
-        // Update time every second for real-time clock
-        timeTimer
-            .sink { [weak self] _ in
-                self?.currentTime = Date()
+        // Use more efficient time updates - only update when second changes
+        Timer.publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newTime in
+                guard let self = self else { return }
+                // Only update if the second actually changed to prevent unnecessary updates
+                if Calendar.current.component(.second, from: self.currentTime) != Calendar.current.component(.second, from: newTime) {
+                    self.currentTime = newTime
+                }
             }
             .store(in: &cancellables)
         
-        // Update battery every 30 seconds
-        batteryTimer
+        // Update battery info on background queue every 30 seconds
+        Timer.publish(every: 30, on: .main, in: .common)
+            .autoconnect()
+            .receive(on: backgroundQueue)
             .sink { [weak self] _ in
-                self?.batteryInfo.update()
+                guard let self = self else { return }
+                var batteryInfo = BatteryInfo()
+                batteryInfo.update()
+                
+                DispatchQueue.main.async {
+                    self.batteryInfo = batteryInfo
+                }
             }
             .store(in: &cancellables)
         
-        // Start network monitoring immediately
+        // Start network monitoring immediately on main thread
         networkInfo.start()
         
         // Initial updates
         currentTime = Date()
-        batteryInfo.update()
+        backgroundQueue.async { [weak self] in
+            guard let self = self else { return }
+            var batteryInfo = BatteryInfo()
+            batteryInfo.update()
+            
+            DispatchQueue.main.async {
+                self.batteryInfo = batteryInfo
+            }
+        }
         
         AppLogger.shared.info("BackgroundUpdateManager: Background updates started successfully")
     }
@@ -58,6 +78,6 @@ class BackgroundUpdateManager: ObservableObject {
     }
     
     deinit {
-        // No cleanup needed; SwiftUI lifecycle will handle cancellation
+        cancellables.removeAll()
     }
 }

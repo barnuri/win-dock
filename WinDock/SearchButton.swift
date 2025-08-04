@@ -15,6 +15,7 @@ struct SearchButton: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(isHovered ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
+                            .animation(.easeInOut(duration: 0.15), value: isHovered)
                     )
                 
                 Image(systemName: "magnifyingglass")

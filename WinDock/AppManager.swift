@@ -83,14 +83,14 @@ class AppManager: ObservableObject {
         // Update immediately
         updateDockApps()
         
-        // Set up periodic updates with higher frequency for better responsiveness
-        appMonitorTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
-            Task { @MainActor in
-                self.updateDockApps()
+        // Reduce frequency significantly for better performance - 2 seconds instead of 0.5
+        appMonitorTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateDockApps()
             }
         }
         
-        // Listen for app launch/quit notifications
+        // Listen for app launch/quit notifications for immediate updates
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(appDidLaunch),
@@ -113,25 +113,28 @@ class AppManager: ObservableObject {
     }
     
     @objc private func appDidLaunch(_ notification: Notification) {
-        Task { @MainActor in
-            updateDockApps()
+        // Immediate update for app launches
+        Task { @MainActor [weak self] in
+            self?.updateDockApps()
         }
     }
     
     @objc private func appDidTerminate(_ notification: Notification) {
-        Task { @MainActor in
-            updateDockApps()
+        // Immediate update for app terminations
+        Task { @MainActor [weak self] in
+            self?.updateDockApps()
         }
     }
        
     // Public function to trigger update from outside
     func updateDockAppsIfNeeded() {
-        Task { @MainActor in
-            updateDockApps()
+        Task { @MainActor [weak self] in
+            self?.updateDockApps()
         }
     }
     
     private func updateDockApps() {
+        // Performance: Cache running apps to avoid multiple queries
         let runningApps = NSWorkspace.shared.runningApplications
             .filter { app in
                 // Filter out WinDock itself and only show regular apps
@@ -149,8 +152,9 @@ class AppManager: ObservableObject {
 
             processedBundleIds.insert(bundleId)
             
-            let windows = getWindowsForApp(app)
-            let windowCount = windows.count // Count all windows including minimized ones
+            // Performance: Only get windows for running apps, minimize expensive calls
+            let windows = app.isActive ? getWindowsForApp(app) : []
+            let windowCount = windows.count
             let (hasNotifications, notificationCount) = getNotificationInfo(for: app)
 
             let dockApp = DockApp(

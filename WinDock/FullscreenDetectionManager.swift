@@ -14,11 +14,19 @@ class FullscreenDetectionManager: ObservableObject {
         guard !isRunning else { return }
         
         isRunning = true
-        monitoringTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.checkForFullscreenWindows()
+        
+        // Add delay to prevent false positives during startup
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            // Reduce frequency from 1.0s to 3.0s for better performance
+            self.monitoringTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+                self?.checkForFullscreenWindows()
+            }
+            
+            // Run initial check after delay
+            self.checkForFullscreenWindows()
         }
         
-        // Also listen for app activation changes
+        // Listen for app activation changes for more immediate updates
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(appDidBecomeActive),
@@ -67,6 +75,11 @@ class FullscreenDetectionManager: ObservableObject {
         
         if previousState != hasFullscreenWindow {
             AppLogger.shared.info("Fullscreen state changed: \(hasFullscreenWindow)")
+            if hasFullscreenWindow {
+                AppLogger.shared.info("DEBUG: Fullscreen window detected during check")
+            } else {
+                AppLogger.shared.info("DEBUG: No fullscreen window detected")
+            }
             NotificationCenter.default.post(
                 name: NSNotification.Name("FullscreenStateChanged"),
                 object: nil,
@@ -77,19 +90,42 @@ class FullscreenDetectionManager: ObservableObject {
     
     private func detectFullscreenWindow() -> Bool {
         // Get the main screen bounds
-        guard let mainScreen = NSScreen.main else { return false }
+        guard let mainScreen = NSScreen.main else { 
+            AppLogger.shared.debug("DEBUG: No main screen found")
+            return false 
+        }
         let screenBounds = mainScreen.frame
+        AppLogger.shared.debug("DEBUG: Screen bounds: \(screenBounds)")
         
         // Get all on-screen windows
         guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            AppLogger.shared.debug("DEBUG: Failed to get window list")
             return false
         }
         
+        AppLogger.shared.debug("DEBUG: Found \(windowList.count) windows to check")
+        
         for windowInfo in windowList {
-            // Skip WinDock windows
+            // Skip WinDock windows and system windows
             if let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
-               let app = NSRunningApplication(processIdentifier: ownerPID),
-               app.bundleIdentifier == Bundle.main.bundleIdentifier {
+               let app = NSRunningApplication(processIdentifier: ownerPID) {
+                
+                // Skip WinDock itself
+                if app.bundleIdentifier == Bundle.main.bundleIdentifier {
+                    continue
+                }
+                
+                // Skip system apps and non-regular apps
+                if app.activationPolicy != .regular {
+                    continue
+                }
+                
+                AppLogger.shared.debug("DEBUG: Checking window from app: \(app.localizedName ?? "Unknown")")
+            }
+            
+            // Check window layer - skip non-main windows (docks, menus, etc.)
+            guard let layer = windowInfo[kCGWindowLayer as String] as? Int,
+                  layer == 0 else { // Only check main window layer
                 continue
             }
             
@@ -103,80 +139,32 @@ class FullscreenDetectionManager: ObservableObject {
             guard let isOnScreen = windowInfo[kCGWindowIsOnscreen as String] as? Bool,
                   isOnScreen,
                   let alpha = windowInfo[kCGWindowAlpha as String] as? CGFloat,
-                  alpha > 0.9,
-                  let layer = windowInfo[kCGWindowLayer as String] as? Int,
-                  layer >= 0 else {
+                  alpha > 0.9 else {
                 continue
             }
             
-            // Check if window covers most or all of the screen (allowing for small margins)
-            let tolerance: CGFloat = 10
-            let coversWidth = bounds.width >= screenBounds.width - tolerance
-            let coversHeight = bounds.height >= screenBounds.height - tolerance
-            let positionedAtTop = bounds.origin.y <= tolerance
-            let positionedAtLeft = bounds.origin.x <= tolerance
+            AppLogger.shared.debug("DEBUG: Window bounds: \(bounds), alpha: \(alpha)")
             
-            if coversWidth && coversHeight && positionedAtTop && positionedAtLeft {
-                // Additional check: make sure it's not just a maximized window with title bar
-                let isActuallyFullscreen = bounds.height >= screenBounds.height - 5
-                
-                if isActuallyFullscreen {
+            // More strict fullscreen detection - must cover exactly the entire screen
+            let tolerance: CGFloat = 2
+            let coversWidth = abs(bounds.width - screenBounds.width) <= tolerance
+            let coversHeight = abs(bounds.height - screenBounds.height) <= tolerance
+            let positionedAtOrigin = abs(bounds.origin.x - screenBounds.origin.x) <= tolerance && 
+                                   abs(bounds.origin.y - screenBounds.origin.y) <= tolerance
+            
+            if coversWidth && coversHeight && positionedAtOrigin {
+                // Additional check: get window name to avoid false positives
+                if let windowName = windowInfo[kCGWindowName as String] as? String,
+                   !windowName.isEmpty {
+                    AppLogger.shared.info("Detected fullscreen window: \(windowName)")
                     return true
+                } else {
+                    AppLogger.shared.debug("DEBUG: Found fullscreen-sized window but no name - might be false positive")
                 }
             }
         }
         
-        // Also check if any app is in fullscreen mode via NSApplication
-        for app in NSWorkspace.shared.runningApplications {
-            if app.bundleIdentifier != Bundle.main.bundleIdentifier && app.activationPolicy == .regular {
-                // Try to detect fullscreen mode using app-specific detection
-                if isAppInFullscreenMode(app) {
-                    return true
-                }
-            }
-        }
-        
-        return false
-    }
-    
-    private func isAppInFullscreenMode(_ app: NSRunningApplication) -> Bool {
-        // Use AppleScript to check if the app is in fullscreen mode
-        guard let appName = app.localizedName else { return false }
-        
-        let script = """
-        tell application "System Events"
-            try
-                tell process "\(appName)"
-                    set windowExists to exists window 1
-                    if windowExists then
-                        set windowBounds to get position of window 1
-                        set windowSize to get size of window 1
-                        set {screenWidth, screenHeight} to get size of desktop
-                        
-                        set {winX, winY} to windowBounds
-                        set {winW, winH} to windowSize
-                        
-                        -- Check if window covers the full screen (with small tolerance)
-                        if winX <= 5 and winY <= 5 and winW >= (screenWidth - 10) and winH >= (screenHeight - 10) then
-                            return true
-                        end if
-                    end if
-                end tell
-            on error
-                return false
-            end try
-            return false
-        end tell
-        """
-        
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            let result = appleScript.executeAndReturnError(&error)
-            if error == nil {
-                return result.booleanValue
-            }
-        }
-        
+        AppLogger.shared.debug("DEBUG: No fullscreen windows detected")
         return false
     }
     

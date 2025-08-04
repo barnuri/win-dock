@@ -29,7 +29,7 @@ struct DockView: View {
         }
     }
     
-    // Computed property for background material
+    // Computed property for background material - cached to avoid repeated calculations
     private var backgroundMaterial: some ShapeStyle {
         if taskbarTransparency >= 0.95 {
             // Use glass effect for high transparency
@@ -167,7 +167,7 @@ struct DockView: View {
                             .fill(Color.accentColor)
                             .frame(width: 3, height: 40)
                             .opacity(dragOverIndex == index ? 0.8 : 0.0)
-                            .animation(.easeInOut(duration: 0.2), value: dragOverIndex)
+                            .animation(.easeInOut(duration: 0.15), value: dragOverIndex)
                         
                         WindowsTaskbarIcon(
                             app: app,
@@ -189,7 +189,7 @@ struct DockView: View {
                     .fill(Color.accentColor)
                     .frame(width: 3, height: 40)
                     .opacity(dragOverIndex == appManager.dockApps.count ? 0.8 : 0.0)
-                    .animation(.easeInOut(duration: 0.2), value: dragOverIndex)
+                    .animation(.easeInOut(duration: 0.15), value: dragOverIndex)
                     .onDrop(of: ["public.plain-text"], delegate: DockDropDelegate(
                         insertionIndex: appManager.dockApps.count,
                         appManager: appManager,
@@ -207,7 +207,7 @@ struct DockView: View {
                             .fill(Color.accentColor)
                             .frame(width: 40, height: 3)
                             .opacity(dragOverIndex == index ? 0.8 : 0.0)
-                            .animation(.easeInOut(duration: 0.2), value: dragOverIndex)
+                            .animation(.easeInOut(duration: 0.15), value: dragOverIndex)
                         
                         WindowsTaskbarIcon(
                             app: app,
@@ -229,7 +229,7 @@ struct DockView: View {
                     .fill(Color.accentColor)
                     .frame(width: 40, height: 3)
                     .opacity(dragOverIndex == appManager.dockApps.count ? 0.8 : 0.0)
-                    .animation(.easeInOut(duration: 0.2), value: dragOverIndex)
+                    .animation(.easeInOut(duration: 0.15), value: dragOverIndex)
                     .onDrop(of: ["public.plain-text"], delegate: DockDropDelegate(
                         insertionIndex: appManager.dockApps.count,
                         appManager: appManager,

@@ -78,13 +78,14 @@ class UserProfileManager: ObservableObject {
         
         // Check authorization status first
         let authorizationStatus = CNContactStore.authorizationStatus(for: .contacts)
+        AppLogger.shared.debug("Contacts authorization status: \(authorizationStatus.rawValue)")
         
         switch authorizationStatus {
         case .authorized:
-            // Permission granted, proceed with access
+            AppLogger.shared.debug("Contacts access already authorized")
             break
         case .notDetermined:
-            // Permission not yet requested - request it synchronously for this use case
+            AppLogger.shared.debug("Contacts access not determined - requesting permission")
             var granted = false
             let semaphore = DispatchSemaphore(value: 0)
             
@@ -92,30 +93,45 @@ class UserProfileManager: ObservableObject {
                 granted = success
                 if let error = error {
                     AppLogger.shared.error("Error requesting contacts access: \(error)")
+                } else {
+                    AppLogger.shared.debug("Contacts access request result: \(success)")
                 }
                 semaphore.signal()
             }
             
-            semaphore.wait()
+            // Wait for the permission dialog to complete
+            let timeout = DispatchTime.now() + .seconds(10)
+            let result = semaphore.wait(timeout: timeout)
+            
+            if result == .timedOut {
+                AppLogger.shared.warning("Contacts permission request timed out")
+                return nil
+            }
             
             if !granted {
                 AppLogger.shared.info("Contacts access denied by user - skipping contact image lookup")
                 return nil
             }
-        case .denied, .restricted:
+        case .denied:
             AppLogger.shared.info("Contacts access denied - skipping contact image lookup")
             return nil
+        case .restricted:
+            AppLogger.shared.info("Contacts access restricted - skipping contact image lookup")
+            return nil
         @unknown default:
-            AppLogger.shared.info("Unknown contacts authorization status - skipping contact image lookup")
+            AppLogger.shared.warning("Unknown contacts authorization status: \(authorizationStatus.rawValue)")
             return nil
         }
         
         let keys = [CNContactImageDataKey, CNContactGivenNameKey, CNContactFamilyNameKey] as [CNKeyDescriptor]
         
         do {
+            AppLogger.shared.debug("Attempting to fetch contacts for user: \(NSFullUserName())")
+            
             // Try to find the current user in contacts
             let predicate = CNContact.predicateForContacts(matchingName: NSFullUserName())
             let contacts = try store.unifiedContacts(matching: predicate, keysToFetch: keys)
+            AppLogger.shared.debug("Found \(contacts.count) contacts matching user name")
             
             for contact in contacts {
                 if let imageData = contact.imageData,
@@ -126,12 +142,15 @@ class UserProfileManager: ObservableObject {
             }
             
             // If no matches by name, try getting "Me" card
+            AppLogger.shared.debug("No image found by name, trying Me contact")
             if let meContact = getMeContact(store: store, keys: keys),
                let imageData = meContact.imageData,
                let image = NSImage(data: imageData) {
                 AppLogger.shared.info("Successfully loaded profile image from Contacts 'Me' card")
                 return image
             }
+            
+            AppLogger.shared.debug("No profile image found in Contacts")
             
         } catch {
             AppLogger.shared.error("Failed to access contacts: \(error)")
@@ -171,13 +190,14 @@ class UserProfileManager: ObservableObject {
         
         // Check authorization status first
         let authorizationStatus = CNContactStore.authorizationStatus(for: .contacts)
+        AppLogger.shared.debug("Contacts authorization status for username: \(authorizationStatus.rawValue)")
         
         switch authorizationStatus {
         case .authorized:
-            // Permission granted, proceed with access
+            AppLogger.shared.debug("Contacts access already authorized for username")
             break
         case .notDetermined:
-            // Permission not yet requested - request it synchronously for this use case
+            AppLogger.shared.debug("Contacts access not determined for username - requesting permission")
             var granted = false
             let semaphore = DispatchSemaphore(value: 0)
             
@@ -185,34 +205,48 @@ class UserProfileManager: ObservableObject {
                 granted = success
                 if let error = error {
                     AppLogger.shared.error("Error requesting contacts access: \(error)")
+                } else {
+                    AppLogger.shared.debug("Contacts access request result for username: \(success)")
                 }
                 semaphore.signal()
             }
             
-            semaphore.wait()
+            // Wait for the permission dialog to complete
+            let timeout = DispatchTime.now() + .seconds(10)
+            let result = semaphore.wait(timeout: timeout)
+            
+            if result == .timedOut {
+                AppLogger.shared.warning("Contacts permission request timed out for username")
+                return nil
+            }
             
             if !granted {
                 AppLogger.shared.info("Contacts access denied by user - skipping contact name lookup")
                 return nil
             }
-        case .denied, .restricted:
+        case .denied:
             AppLogger.shared.info("Contacts access denied - skipping contact name lookup")
             return nil
+        case .restricted:
+            AppLogger.shared.info("Contacts access restricted - skipping contact name lookup")
+            return nil
         @unknown default:
-            AppLogger.shared.info("Unknown contacts authorization status - skipping contact name lookup")
+            AppLogger.shared.warning("Unknown contacts authorization status for username: \(authorizationStatus.rawValue)")
             return nil
         }
         
         let keys = [CNContactGivenNameKey, CNContactFamilyNameKey] as [CNKeyDescriptor]
         
         do {
+            AppLogger.shared.debug("Attempting to fetch contact name for user: \(NSFullUserName())")
             let predicate = CNContact.predicateForContacts(matchingName: NSFullUserName())
             let contacts = try store.unifiedContacts(matching: predicate, keysToFetch: keys)
+            AppLogger.shared.debug("Found \(contacts.count) contacts matching user name for username lookup")
             
             if let contact = contacts.first {
                 let fullName = "\(contact.givenName) \(contact.familyName)".trimmingCharacters(in: .whitespaces)
                 if !fullName.isEmpty {
-                    AppLogger.shared.info("Successfully loaded user name from Contacts")
+                    AppLogger.shared.info("Successfully loaded user name from Contacts: \(fullName)")
                     return fullName
                 }
             }

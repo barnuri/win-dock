@@ -53,12 +53,14 @@ struct SystemTrayView: View {
                 // Volume indicator
                 VolumeIndicatorView()
                 
-                // Date and time
-                DateTimeView(
-                    currentTime: backgroundUpdateManager.currentTime,
-                    use24HourClock: use24HourClock,
-                    dateFormat: dateFormat
-                )
+                // Date and time - use TimelineView for efficient updates
+                TimelineView(.everyMinute) { context in
+                    DateTimeView(
+                        currentTime: context.date,
+                        use24HourClock: use24HourClock,
+                        dateFormat: dateFormat
+                    )
+                }
                 
                 // User profile image
                 UserProfileView(userProfileManager: userProfileManager)
@@ -67,7 +69,7 @@ struct SystemTrayView: View {
             .padding(.vertical, 6)
             .background(Color.clear)
             .onAppear {
-                // Background updates are already running globally
+                // Background updates are managed by BackgroundUpdateManager
                 AppLogger.shared.info("SystemTrayView appeared - using background updates")
             }
         }

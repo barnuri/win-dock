@@ -498,7 +498,15 @@ struct StartMenuButton: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-            .background(isHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(isHovered ? Color.accentColor.opacity(0.3) : Color.clear, lineWidth: 1)
+                    )
+                    .animation(.easeInOut(duration: 0.15), value: isHovered)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

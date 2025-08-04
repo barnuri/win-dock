@@ -67,8 +67,8 @@ class DockWindow: NSPanel {
         // Set a proper window title for app switcher
         self.title = "WinDock Taskbar"
 
-        // Set initial alpha value based on auto-hide setting
-        alphaValue = autoHide ? 0.0 : 1.0
+        // Set initial alpha value - always start visible
+        alphaValue = 1.0
         
         updatePosition()
         appManager.startMonitoring()
@@ -108,19 +108,21 @@ class DockWindow: NSPanel {
     
     private func handleFullscreenStateChange(_ hasFullscreen: Bool) {
         if hasFullscreen {
-            // Hide dock when there's a fullscreen window
-            hideTimer?.invalidate()
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.3
-                self.animator().alphaValue = 0.0
+            // Only hide dock when there's a fullscreen window AND auto-hide is enabled
+            if autoHide {
+                hideTimer?.invalidate()
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.3
+                    self.animator().alphaValue = 0.0
+                }
             }
             // AppLogger.shared.info("Dock hidden due to fullscreen window")
         } else {
-            // Show dock when no fullscreen windows
+            // Show dock when no fullscreen windows, unless auto-hide is enabled and mouse isn't over dock
             hideTimer?.invalidate()
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.3
-                self.animator().alphaValue = autoHide ? 0.0 : 1.0
+                self.animator().alphaValue = 1.0
             }
             // AppLogger.shared.info("Dock shown - no fullscreen windows")
         }

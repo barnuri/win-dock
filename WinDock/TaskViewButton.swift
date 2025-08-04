@@ -2,13 +2,19 @@ import SwiftUI
 import AppKit
 
 struct TaskViewButton: View {
+    @State private var isHovered = false
     
     var body: some View {
         Button(action: openMissionControl) {
             ZStack {
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.clear)
+                    .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.clear)
                     .frame(width: 48, height: 38)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(isHovered ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
+                            .animation(.easeInOut(duration: 0.15), value: isHovered)
+                    )
                 
                 Image(systemName: "square.grid.3x3")
                     .font(.system(size: 16, weight: .medium))
@@ -16,6 +22,11 @@ struct TaskViewButton: View {
             }
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isHovered = hovering
+            }
+        }
         .help("Task View (Mission Control)")
     }
     
