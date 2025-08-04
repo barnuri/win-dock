@@ -95,6 +95,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             WindowsResizeManager.shared.start()
         }
         
+        // Check and request Apple Events authorization for app integrations
+        checkAndRequestAppleEventsAuthorization()
+        
         // Ensure app is properly activated
         NSApp.activate(ignoringOtherApps: true)
         
@@ -504,6 +507,56 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc private func quitApp() {
         NSApplication.shared.terminate(nil)
+    }
+    
+    private func checkAndRequestAppleEventsAuthorization() {
+        // Test Apple Events authorization by executing a simple script
+        let testScript = """
+        tell application "System Events"
+            get name of processes
+        end tell
+        """
+        
+        DispatchQueue.global(qos: .utility).async {
+            if let appleScript = NSAppleScript(source: testScript) {
+                var error: NSDictionary?
+                appleScript.executeAndReturnError(&error)
+                
+                DispatchQueue.main.async {
+                    if let error = error {
+                        let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
+                        
+                        if errorNumber == -1743 {
+                            AppLogger.shared.warning("Apple Events authorization required. User will need to grant permission in System Preferences > Security & Privacy > Privacy > Automation for WinDock to control other applications.")
+                            
+                            // Show user-friendly notification
+                            self.showAppleEventsPermissionAlert()
+                        } else {
+                            AppLogger.shared.error("Apple Events test error: \(error)")
+                        }
+                    } else {
+                        AppLogger.shared.info("Apple Events authorization is working correctly")
+                    }
+                }
+            }
+        }
+    }
+    
+    private func showAppleEventsPermissionAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Permission Required"
+        alert.informativeText = "WinDock needs permission to control other applications to show notification badges and provide app integrations. Please:\n\n1. Open System Preferences\n2. Go to Security & Privacy > Privacy > Automation\n3. Enable WinDock to control System Events and other applications"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Open System Preferences")
+        alert.addButton(withTitle: "Later")
+        
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            // Open Security & Privacy preferences
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
     
     deinit {

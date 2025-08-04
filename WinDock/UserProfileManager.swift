@@ -9,10 +9,12 @@ class UserProfileManager: ObservableObject {
     @Published private(set) var userName: String = ""
     
     private init() {
+        AppLogger.shared.debug("UserProfileManager initializing - bundle path: \(Bundle.main.bundlePath)")
         loadUserProfile()
     }
     
     func loadUserProfile() {
+        AppLogger.shared.debug("UserProfileManager.loadUserProfile() called")
         DispatchQueue.global(qos: .background).async {
             let image = self.fetchUserProfileImage()
             let name = self.fetchUserName()
@@ -92,7 +94,12 @@ class UserProfileManager: ObservableObject {
             store.requestAccess(for: .contacts) { success, error in
                 granted = success
                 if let error = error {
-                    AppLogger.shared.error("Error requesting contacts access: \(error)")
+                    let isDevMode = !Bundle.main.bundlePath.contains("/Applications/")
+                    if isDevMode {
+                        AppLogger.shared.info("Contacts access request failed in debug mode: \(error.localizedDescription) - this is expected when running from build directory")
+                    } else {
+                        AppLogger.shared.error("Error requesting contacts access: \(error)")
+                    }
                 } else {
                     AppLogger.shared.debug("Contacts access request result: \(success)")
                 }
@@ -109,17 +116,27 @@ class UserProfileManager: ObservableObject {
             }
             
             if !granted {
-                AppLogger.shared.info("Contacts access denied by user - skipping contact image lookup")
+                let isDevMode = !Bundle.main.bundlePath.contains("/Applications/")
+                if isDevMode {
+                    AppLogger.shared.info("Contacts access denied in debug mode - this is expected when running from build directory")
+                } else {
+                    AppLogger.shared.info("Contacts access denied by user - skipping contact image lookup")
+                }
                 return nil
             }
         case .denied:
-            AppLogger.shared.info("Contacts access denied - skipping contact image lookup")
+            let isDevMode = !Bundle.main.bundlePath.contains("/Applications/")
+            if isDevMode {
+                AppLogger.shared.info("Contacts access denied in debug mode - this is expected when running from build directory")
+            } else {
+                AppLogger.shared.info("Contacts access denied - skipping contact image lookup")
+            }
             return nil
         case .restricted:
             AppLogger.shared.info("Contacts access restricted - skipping contact image lookup")
             return nil
         @unknown default:
-            AppLogger.shared.warning("Unknown contacts authorization status: \(authorizationStatus.rawValue)")
+            AppLogger.shared.debug("Unknown contacts authorization status: \(authorizationStatus.rawValue)")
             return nil
         }
         
@@ -204,7 +221,12 @@ class UserProfileManager: ObservableObject {
             store.requestAccess(for: .contacts) { success, error in
                 granted = success
                 if let error = error {
-                    AppLogger.shared.error("Error requesting contacts access: \(error)")
+                    let isDevMode = !Bundle.main.bundlePath.contains("/Applications/")
+                    if isDevMode {
+                        AppLogger.shared.info("Contacts access request failed in debug mode for username: \(error.localizedDescription) - this is expected when running from build directory")
+                    } else {
+                        AppLogger.shared.error("Error requesting contacts access: \(error)")
+                    }
                 } else {
                     AppLogger.shared.debug("Contacts access request result for username: \(success)")
                 }
@@ -221,17 +243,27 @@ class UserProfileManager: ObservableObject {
             }
             
             if !granted {
-                AppLogger.shared.info("Contacts access denied by user - skipping contact name lookup")
+                let isDevMode = !Bundle.main.bundlePath.contains("/Applications/")
+                if isDevMode {
+                    AppLogger.shared.info("Contacts access denied in debug mode for username - this is expected when running from build directory")
+                } else {
+                    AppLogger.shared.info("Contacts access denied by user - skipping contact name lookup")
+                }
                 return nil
             }
         case .denied:
-            AppLogger.shared.info("Contacts access denied - skipping contact name lookup")
+            let isDevMode = !Bundle.main.bundlePath.contains("/Applications/")
+            if isDevMode {
+                AppLogger.shared.info("Contacts access denied in debug mode for username - this is expected when running from build directory")
+            } else {
+                AppLogger.shared.info("Contacts access denied - skipping contact name lookup")
+            }
             return nil
         case .restricted:
             AppLogger.shared.info("Contacts access restricted - skipping contact name lookup")
             return nil
         @unknown default:
-            AppLogger.shared.warning("Unknown contacts authorization status for username: \(authorizationStatus.rawValue)")
+            AppLogger.shared.debug("Unknown contacts authorization status for username: \(authorizationStatus.rawValue)")
             return nil
         }
         

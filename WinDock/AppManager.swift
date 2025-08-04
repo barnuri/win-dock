@@ -830,7 +830,25 @@ class AppManager: ObservableObject {
     private func getTeamsNotificationCount() -> Int {
         AppLogger.shared.debug("Getting Teams notification count...")
         
-        // Method 1: Simple window title check (most reliable for Teams)
+        // First, try to find the Teams app
+        let teamsRunningApps = NSWorkspace.shared.runningApplications.filter { app in
+            app.bundleIdentifier == "com.microsoft.teams2" || 
+            app.bundleIdentifier == "com.microsoft.teams" ||
+            app.localizedName?.lowercased().contains("teams") == true
+        }
+        
+        guard !teamsRunningApps.isEmpty else {
+            AppLogger.shared.debug("Teams is not running")
+            return 0
+        }
+        
+        // Method 1: Check window list via Core Graphics (no AppleScript needed)
+        if let count = getTeamsNotificationCountViaWindowList() {
+            AppLogger.shared.debug("Teams notification count via window list: \(count)")
+            return count
+        }
+        
+        // Method 2: Fallback to AppleScript with better error handling
         let script = """
         tell application "System Events"
             try
@@ -884,7 +902,13 @@ class AppManager: ObservableObject {
             let result = appleScript.executeAndReturnError(&error)
             
             if let error = error {
-                AppLogger.shared.error("Teams AppleScript error: \(error)")
+                let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
+                
+                if errorNumber == -1743 {
+                    AppLogger.shared.warning("Teams AppleScript authorization required - user needs to grant permission in System Preferences > Security & Privacy > Privacy > Automation")
+                } else {
+                    AppLogger.shared.error("Teams AppleScript error: \(error)")
+                }
                 return 0
             }
             
@@ -894,6 +918,46 @@ class AppManager: ObservableObject {
         }
         
         AppLogger.shared.debug("Teams notification count: 0 (no script result)")
+        return 0
+    }
+    
+    private func getTeamsNotificationCountViaWindowList() -> Int? {
+        // Get window list for Teams via Core Graphics API
+        guard let windowList = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        
+        for windowInfo in windowList {
+            guard let ownerName = windowInfo[kCGWindowOwnerName as String] as? String,
+                  ownerName.lowercased().contains("teams") else { continue }
+            
+            guard let windowTitle = windowInfo[kCGWindowName as String] as? String,
+                  !windowTitle.isEmpty else { continue }
+            
+            // Look for notification patterns in window title
+            if windowTitle.contains("(") && windowTitle.contains(")") {
+                // Extract number from parentheses
+                let components = windowTitle.components(separatedBy: "(")
+                if components.count > 1 {
+                    let badgePart = components[1]
+                    let badgeComponents = badgePart.components(separatedBy: ")")
+                    if let badgeString = badgeComponents.first,
+                       let badgeCount = Int(badgeString.trimmingCharacters(in: .whitespaces)) {
+                        AppLogger.shared.debug("Found Teams notification count in window title: \(badgeCount)")
+                        return badgeCount
+                    }
+                }
+            }
+            
+            // Look for other notification indicators
+            if windowTitle.lowercased().contains("notification") ||
+               windowTitle.lowercased().contains("unread") ||
+               windowTitle.lowercased().contains("message") {
+                AppLogger.shared.debug("Found Teams notification indicator in window title")
+                return 1
+            }
+        }
+        
         return 0
     }
     
