@@ -25,3 +25,5 @@ else
 fi
 
 echo "build finished successfully"
+echo "to open the app, run:"
+echo "open build/Build/Products/Release/WinDock.app"

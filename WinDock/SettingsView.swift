@@ -173,7 +173,7 @@ struct GeneralSettingsTab: View {
     
     private var permissionsSection: some View {
         Section("Permissions") {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Apple Events Authorization")
@@ -191,10 +191,44 @@ struct GeneralSettingsTab: View {
                     .buttonStyle(.borderedProminent)
                 }
                 
-                Text("Click the button above to trigger the macOS permission dialog. WinDock will then appear in System Preferences > Security & Privacy > Privacy > Automation, where you can grant it permission to control other applications.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Divider()
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Manual Setup Instructions:")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("If WinDock doesn't appear in Automation settings after clicking the button above:")
+                            .font(.caption)
+                        
+                        Group {
+                            Text("1. Open System Preferences > Security & Privacy > Privacy > Automation")
+                            Text("2. Click the lock icon and enter your password")
+                            Text("3. If WinDock is listed, enable 'System Events' and other apps")
+                            Text("4. If WinDock is not listed, restart WinDock or use a Teams/Slack feature first")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 12)
+                    }
+                }
+                
+                HStack {
+                    Button("Open System Preferences") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    Spacer()
+                    
+                    Button("Test Permissions") {
+                        testCurrentPermissions()
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
             .padding(.vertical, 4)
         }
@@ -202,16 +236,123 @@ struct GeneralSettingsTab: View {
     
     private func requestAppleEventsPermission() {
         // This will trigger the permission dialog and make WinDock appear in the Automation list
-        let script = """
+        // We'll try multiple approaches to ensure the dialog appears
+        
+        let scripts = [
+            // Script 1: Try to control System Events
+            """
+            tell application "System Events"
+                get name of first process
+            end tell
+            """,
+            
+            // Script 2: Try to control Finder (more likely to trigger dialog)
+            """
+            tell application "Finder"
+                get name
+            end tell
+            """,
+            
+            // Script 3: Try a more complex System Events operation
+            """
+            tell application "System Events"
+                tell process "Finder"
+                    get name
+                end tell
+            end tell
+            """
+        ]
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            var permissionTriggered = false
+            
+            for (index, script) in scripts.enumerated() {
+                if let appleScript = NSAppleScript(source: script) {
+                    var error: NSDictionary?
+                    let result = appleScript.executeAndReturnError(&error)
+                    
+                    if let error = error {
+                        let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
+                        
+                        if errorNumber == -1743 {
+                            permissionTriggered = true
+                            AppLogger.shared.info("Permission dialog triggered with script \(index + 1)")
+                            break
+                        } else if errorNumber == -1708 {
+                            // Script was successful - permission already granted
+                            DispatchQueue.main.async {
+                                let alert = NSAlert()
+                                alert.messageText = "Permission Already Granted"
+                                alert.informativeText = "Apple Events authorization is already working correctly. WinDock can control other applications."
+                                alert.alertStyle = .informational
+                                alert.addButton(withTitle: "OK")
+                                alert.runModal()
+                            }
+                            return
+                        }
+                    } else {
+                        // Script executed successfully - permission is granted
+                        DispatchQueue.main.async {
+                            let alert = NSAlert()
+                            alert.messageText = "Permission Already Granted"
+                            alert.informativeText = "Apple Events authorization is already working correctly. WinDock can control other applications."
+                            alert.alertStyle = .informational
+                            alert.addButton(withTitle: "OK")
+                            alert.runModal()
+                        }
+                        return
+                    }
+                }
+                
+                // Small delay between attempts
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+            
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                
+                if permissionTriggered {
+                    alert.messageText = "Permission Request Initiated"
+                    alert.informativeText = "WinDock should now appear in System Preferences > Security & Privacy > Privacy > Automation. Please enable WinDock to control System Events and other applications you want to integrate with.\n\nIf WinDock doesn't appear immediately, try clicking this button again or restart WinDock."
+                    alert.alertStyle = .informational
+                    alert.addButton(withTitle: "Open System Preferences")
+                    alert.addButton(withTitle: "OK")
+                    
+                    let response = alert.runModal()
+                    if response == .alertFirstButtonReturn {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                } else {
+                    alert.messageText = "Permission Request Failed"
+                    alert.informativeText = "Unable to trigger the permission dialog. Please try:\n\n1. Restart WinDock\n2. Try using WinDock features that require app control\n3. Manually add WinDock to Automation settings if needed"
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: "Open System Preferences")
+                    alert.addButton(withTitle: "OK")
+                    
+                    let response = alert.runModal()
+                    if response == .alertFirstButtonReturn {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func testCurrentPermissions() {
+        let testScript = """
         tell application "System Events"
             get name of first process
         end tell
         """
         
         DispatchQueue.global(qos: .userInitiated).async {
-            if let appleScript = NSAppleScript(source: script) {
+            if let appleScript = NSAppleScript(source: testScript) {
                 var error: NSDictionary?
-                let result = appleScript.executeAndReturnError(&error)
+                appleScript.executeAndReturnError(&error)
                 
                 DispatchQueue.main.async {
                     let alert = NSAlert()
@@ -220,32 +361,22 @@ struct GeneralSettingsTab: View {
                         let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
                         
                         if errorNumber == -1743 {
-                            alert.messageText = "Permission Request Initiated"
-                            alert.informativeText = "WinDock should now appear in System Preferences > Security & Privacy > Privacy > Automation. Please enable WinDock to control System Events and other applications you want to integrate with."
-                            alert.alertStyle = .informational
-                            alert.addButton(withTitle: "Open System Preferences")
-                            alert.addButton(withTitle: "OK")
-                            
-                            let response = alert.runModal()
-                            if response == .alertFirstButtonReturn {
-                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
-                                    NSWorkspace.shared.open(url)
-                                }
-                            }
+                            alert.messageText = "Permissions Needed"
+                            alert.informativeText = "WinDock does not have Apple Events authorization. Please grant permission in System Preferences > Security & Privacy > Privacy > Automation."
+                            alert.alertStyle = .warning
                         } else {
                             alert.messageText = "Permission Error"
-                            alert.informativeText = "An unexpected error occurred: \(error)"
+                            alert.informativeText = "Error testing permissions: \(error)"
                             alert.alertStyle = .warning
-                            alert.addButton(withTitle: "OK")
-                            alert.runModal()
                         }
                     } else {
-                        alert.messageText = "Permission Already Granted"
-                        alert.informativeText = "Apple Events authorization is already working correctly. WinDock can control other applications."
+                        alert.messageText = "Permissions Working"
+                        alert.informativeText = "Apple Events authorization is working correctly! WinDock can control other applications."
                         alert.alertStyle = .informational
-                        alert.addButton(withTitle: "OK")
-                        alert.runModal()
                     }
+                    
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
                 }
             }
         }
