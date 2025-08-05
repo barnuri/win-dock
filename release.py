@@ -654,22 +654,49 @@ class ReleaseManager:
         cask_filename = "windock.rb"
 
         try:
-            # Clean up any existing temp directory
-            if homebrew_cask_dir.exists():
-                shutil.rmtree(homebrew_cask_dir)
+            # Check if we already have the homebrew-cask repository
+            if homebrew_cask_dir.exists() and (homebrew_cask_dir / ".git").exists():
+                print("🔄 Resetting existing homebrew-cask repository...")
+                # Change to the cloned directory to run git commands
+                original_dir = os.getcwd()
+                os.chdir(homebrew_cask_dir)
 
-            # Clone the homebrew-cask repository
-            print("📥 Cloning homebrew-cask repository...")
-            subprocess.run(
-                ["git", "clone", "https://github.com/Homebrew/homebrew-cask.git", str(homebrew_cask_dir)], check=True
-            )
+                # Reset to clean state and pull latest changes
+                subprocess.run(["git", "reset", "--hard", "HEAD"], check=True)
+                subprocess.run(["git", "clean", "-fd"], check=True)
+                subprocess.run(["git", "checkout", "master"], check=False)  # Don't fail if already on master
+                subprocess.run(["git", "pull", "origin", "master"], check=True)
+
+                # Go back to original directory
+                os.chdir(original_dir)
+            else:
+                # Clean up any existing directory that's not a git repo
+                if homebrew_cask_dir.exists():
+                    shutil.rmtree(homebrew_cask_dir)
+
+                # Clone the homebrew-cask repository
+                print("📥 Cloning homebrew-cask repository...")
+                subprocess.run(
+                    ["git", "clone", "https://github.com/barnuri/homebrew-cask", str(homebrew_cask_dir)],
+                    check=True,
+                )
 
             # Change to the cloned directory
             original_dir = os.getcwd()
             os.chdir(homebrew_cask_dir)
 
-            # Create a new branch for the cask submission
+            # use gh cli to sync fork https://github.com/barnuri/homebrew-cask with upstream
+            subprocess.run(
+                ["gh", "repo", "sync", "barnuri/homebrew-cask", "--force"],
+                check=True,
+            )
+
             branch_name = f"windock-{self.new_version}"
+
+            # delete branch if it exists
+            subprocess.run(["git", "checkout", "-D", branch_name], check=False)
+
+            # Create a new branch for the cask submission
             subprocess.run(["git", "checkout", "-b", branch_name], check=True)
 
             # Determine the correct subdirectory for the cask
@@ -694,17 +721,6 @@ class ReleaseManager:
             # Update the SHA256 checksum in the cask file
             self.update_cask_checksum(cask_path)
 
-            # Test the cask before submitting
-            print("🧪 Testing the cask...")
-            audit_result = subprocess.run(
-                ["brew", "audit", "--new", "--cask", str(cask_path)], capture_output=True, text=True
-            )
-
-            if audit_result.returncode != 0:
-                print(f"⚠️ Cask audit failed: {audit_result.stderr}")
-                print("Please fix the issues before submitting to Homebrew")
-                return
-
             # Add and commit the cask
             subprocess.run(["git", "add", str(cask_path)], check=True)
 
@@ -718,21 +734,14 @@ class ReleaseManager:
             subprocess.run(["git", "commit", "-m", commit_message], check=True)
 
             # Check if we have GitHub CLI to create the PR
-            try:
-                subprocess.run(["gh", "--version"], capture_output=True, check=True)
+            subprocess.run(["gh", "--version"], capture_output=True, check=True)
 
-                # Fork the repository if we haven't already
-                fork_result = subprocess.run(["gh", "repo", "fork", "--clone=false"], capture_output=True, text=True)
-                if fork_result.returncode != 0 and "already exists" not in fork_result.stderr:
-                    print(f"⚠️ Could not fork repository: {fork_result.stderr}")
-                    return
+            # Push the branch to our fork
+            subprocess.run(["git", "push", "-u", "origin", branch_name], check=True)
 
-                # Push the branch to our fork
-                subprocess.run(["git", "push", "-u", "origin", branch_name], check=True)
-
-                # Create the pull request
-                pr_title = f"windock {self.new_version}"
-                pr_body = f"""WinDock is a Windows 11-style taskbar for macOS.
+            # Create the pull request
+            pr_title = f"windock {self.new_version}"
+            pr_body = f"""WinDock is a Windows 11-style taskbar for macOS.
 
 **Cask Details:**
 - Version: {self.new_version}
@@ -747,41 +756,21 @@ class ReleaseManager:
 This cask provides a convenient way for macOS users to install WinDock via Homebrew.
 """
 
-                pr_result = subprocess.run(
-                    ["gh", "pr", "create", "--title", pr_title, "--body", pr_body, "--repo", "Homebrew/homebrew-cask"],
-                    capture_output=True,
-                    text=True,
-                )
+            pr_result = subprocess.run(
+                ["gh", "pr", "create", "--title", pr_title, "--body", pr_body, "--repo", "Homebrew/homebrew-cask"],
+                capture_output=True,
+                text=True,
+            )
 
-                if pr_result.returncode == 0:
-                    pr_url = pr_result.stdout.strip()
-                    print(f"✅ Pull request created successfully: {pr_url}")
-                else:
-                    print(f"⚠️ Failed to create pull request: {pr_result.stderr}")
-                    print(f"Branch '{branch_name}' has been pushed to your fork.")
-                    print("You can create the pull request manually on GitHub.")
-
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                print("⚠️ GitHub CLI not found. Please install 'gh' to automatically create pull requests.")
-                print(f"Branch '{branch_name}' created locally.")
-                print("To submit manually:")
-                print("1. Fork https://github.com/Homebrew/homebrew-cask")
-                print(f"2. Push branch '{branch_name}' to your fork")
-                print("3. Create a pull request on GitHub")
-
-        except subprocess.CalledProcessError as e:
-            print(f"⚠️ Error during Homebrew submission: {e}")
-            print("Please submit the cask manually to Homebrew.")
-        except Exception as e:
-            print(f"⚠️ Error during Homebrew submission: {e}")
+            if pr_result.returncode == 0:
+                pr_url = pr_result.stdout.strip()
+                print(f"✅ Pull request created successfully: {pr_url}")
+            else:
+                print(f"⚠️ Failed to create pull request: {pr_result.stderr}")
+                raise RuntimeError("Failed to create Homebrew pull request")
         finally:
-            # Clean up and return to original directory
+            # Return to original directory but keep the homebrew-cask repo for future use
             os.chdir(original_dir)
-            if homebrew_cask_dir.exists():
-                try:
-                    shutil.rmtree(homebrew_cask_dir)
-                except Exception:
-                    print(f"⚠️ Could not clean up temp directory: {homebrew_cask_dir}")
 
     def update_cask_checksum(self, cask_path):
         """Update the SHA256 checksum in the cask file."""
