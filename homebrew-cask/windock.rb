@@ -1,5 +1,5 @@
 cask "windock" do
-  version "1.0.19"
+  version "1.0.20"
   sha256 :no_check
 
   url "https://github.com/barnuri/win-dock/releases/download/v#{version}/WinDock.zip"
