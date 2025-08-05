@@ -8,6 +8,7 @@ This script handles the entire release process:
 4. Creating git tag
 5. Generating release notes
 6. Creating GitHub release (if GitHub CLI is installed)
+7. Submitting cask to Homebrew (if GitHub CLI is installed)
 
 Usage:
     python release.py [major|minor|patch]
@@ -16,12 +17,14 @@ Optional Dependencies:
     For enhanced functionality, you can install these optional packages:
     - GitPython: `pip install gitpython`
     - PyGithub: `pip install PyGithub` (for future GitHub API integration)
+    - GitHub CLI (`gh`): Required for automatic Homebrew cask submission
 """
 
 import argparse
 import importlib.util
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -61,9 +64,11 @@ class ReleaseManager:
         self.create_tag()
         self.generate_release_notes()
         self.create_github_release()
+        self.submit_to_homebrew()
 
         self.cleanup()
         print(f"✅ Release process completed successfully! Version {self.new_version} released.")
+        print("🍺 If Homebrew submission was successful, the cask will be available after PR approval.")
 
     def cleanup_stale_resources(self):
         """Clean up any stale resources that might interfere with the release process."""
@@ -162,8 +167,43 @@ class ReleaseManager:
                 plistlib.dump(plist_data, f)
 
             print(f"📝 Updated Info.plist with version {self.new_version}")
+
+            # Also update the Homebrew cask version
+            self.update_homebrew_cask_version()
         except Exception as e:
             raise RuntimeError(f"❌ Error updating Info.plist: {e}")
+
+    def update_homebrew_cask_version(self):
+        """Update the version in the Homebrew cask file."""
+        cask_path = self.root_dir / "homebrew-cask" / "windock.rb"
+
+        if not cask_path.exists():
+            print("⚠️ Warning: Homebrew cask file not found, skipping version update")
+            return
+
+        try:
+            # Read the cask file
+            with open(cask_path, "r") as f:
+                content = f.read()
+
+            # Update version
+            updated_content = re.sub(r'version "[\d\.]+"', f'version "{self.new_version}"', content)
+
+            # Update the URL to use the new version
+            updated_content = re.sub(
+                r'url "https://github\.com/barnuri/win-dock/releases/download/v[\d\.]+/WinDock\.zip"',
+                f'url "https://github.com/barnuri/win-dock/releases/download/v{self.new_version}/WinDock.zip"',
+                updated_content,
+            )
+
+            # Write back to file
+            with open(cask_path, "w") as f:
+                f.write(updated_content)
+
+            print(f"📝 Updated Homebrew cask with version {self.new_version}")
+        except Exception as e:
+            print(f"⚠️ Warning: Error updating Homebrew cask: {e}")
+            print("You may need to update the cask version manually.")
 
     def build_app(self):
         """Build the application using the build.sh script."""
@@ -288,6 +328,14 @@ class ReleaseManager:
             print(f"🔍 [DRY RUN] Would commit and push version bump to {self.new_version}")
             return
 
+        # Files to commit
+        files_to_commit = [str(self.info_plist_path)]
+
+        # Add Homebrew cask file if it exists
+        cask_path = self.root_dir / "homebrew-cask" / "windock.rb"
+        if cask_path.exists():
+            files_to_commit.append(str(cask_path))
+
         # Check if we have GitPython available for a more Pythonic approach
         if HAVE_GITPYTHON:
             try:
@@ -295,8 +343,9 @@ class ReleaseManager:
 
                 repo = git.Repo(self.root_dir)
 
-                # Stage the file
-                repo.git.add(str(self.info_plist_path))
+                # Stage the files
+                for file_path in files_to_commit:
+                    repo.git.add(file_path)
 
                 # Commit changes
                 repo.index.commit(f"Bump version to {self.new_version}")
@@ -313,16 +362,20 @@ class ReleaseManager:
             except Exception as e:
                 print(f"⚠️ Warning: Git operations with GitPython failed: {e}")
                 print("Falling back to subprocess for git operations")
-                self._git_commit_via_subprocess()
+                self._git_commit_via_subprocess(files_to_commit)
         else:
             # Use subprocess approach if GitPython is not available
-            self._git_commit_via_subprocess()
+            self._git_commit_via_subprocess(files_to_commit)
 
-    def _git_commit_via_subprocess(self):
+    def _git_commit_via_subprocess(self, files_to_commit=None):
         """Helper method to commit using subprocess."""
+        if files_to_commit is None:
+            files_to_commit = [str(self.info_plist_path)]
+
         try:
             # Add and commit changes
-            subprocess.run(["git", "add", str(self.info_plist_path)], check=True)
+            for file_path in files_to_commit:
+                subprocess.run(["git", "add", file_path], check=True)
             subprocess.run(["git", "commit", "-m", f"Bump version to {self.new_version}"], check=True)
 
             # Push changes
@@ -588,6 +641,195 @@ class ReleaseManager:
                 print("You may need to create the release manually through the GitHub web interface.")
         # Note: we could implement PyGithub approach here as an alternative
 
+    def submit_to_homebrew(self):
+        """Submit the cask to Homebrew by creating a pull request."""
+        print("🍺 Submitting cask to Homebrew...")
+
+        if self.dry_run:
+            print("🔍 [DRY RUN] Would submit cask to Homebrew")
+            return
+
+        # Check if we're already in a homebrew-cask repo or need to clone it
+        homebrew_cask_dir = self.root_dir.parent / "homebrew-cask-temp"
+        cask_filename = "windock.rb"
+
+        try:
+            # Clean up any existing temp directory
+            if homebrew_cask_dir.exists():
+                shutil.rmtree(homebrew_cask_dir)
+
+            # Clone the homebrew-cask repository
+            print("📥 Cloning homebrew-cask repository...")
+            subprocess.run(
+                ["git", "clone", "https://github.com/Homebrew/homebrew-cask.git", str(homebrew_cask_dir)], check=True
+            )
+
+            # Change to the cloned directory
+            original_dir = os.getcwd()
+            os.chdir(homebrew_cask_dir)
+
+            # Create a new branch for the cask submission
+            branch_name = f"windock-{self.new_version}"
+            subprocess.run(["git", "checkout", "-b", branch_name], check=True)
+
+            # Determine the correct subdirectory for the cask
+            # Homebrew casks are organized by first letter
+            first_letter = cask_filename[0].lower()
+            cask_dir = homebrew_cask_dir / "Casks" / first_letter
+            cask_path = cask_dir / cask_filename
+
+            # Copy our cask file to the correct location
+            local_cask_path = self.root_dir / "homebrew-cask" / cask_filename
+            if not local_cask_path.exists():
+                print(f"⚠️ Warning: Local cask file not found at {local_cask_path}")
+                return
+
+            # Ensure the target directory exists
+            cask_dir.mkdir(parents=True, exist_ok=True)
+
+            # Copy the cask file
+            shutil.copy2(local_cask_path, cask_path)
+            print(f"📝 Copied cask to {cask_path}")
+
+            # Update the SHA256 checksum in the cask file
+            self.update_cask_checksum(cask_path)
+
+            # Test the cask before submitting
+            print("🧪 Testing the cask...")
+            audit_result = subprocess.run(
+                ["brew", "audit", "--new", "--cask", str(cask_path)], capture_output=True, text=True
+            )
+
+            if audit_result.returncode != 0:
+                print(f"⚠️ Cask audit failed: {audit_result.stderr}")
+                print("Please fix the issues before submitting to Homebrew")
+                return
+
+            # Add and commit the cask
+            subprocess.run(["git", "add", str(cask_path)], check=True)
+
+            # Check if this is a new cask or an update
+            status_result = subprocess.run(
+                ["git", "status", "--porcelain", str(cask_path)], capture_output=True, text=True
+            )
+
+            is_new_cask = status_result.stdout.strip().startswith("A")
+            commit_message = f"windock {self.new_version} (new cask)" if is_new_cask else f"windock {self.new_version}"
+            subprocess.run(["git", "commit", "-m", commit_message], check=True)
+
+            # Check if we have GitHub CLI to create the PR
+            try:
+                subprocess.run(["gh", "--version"], capture_output=True, check=True)
+
+                # Fork the repository if we haven't already
+                fork_result = subprocess.run(["gh", "repo", "fork", "--clone=false"], capture_output=True, text=True)
+                if fork_result.returncode != 0 and "already exists" not in fork_result.stderr:
+                    print(f"⚠️ Could not fork repository: {fork_result.stderr}")
+                    return
+
+                # Push the branch to our fork
+                subprocess.run(["git", "push", "-u", "origin", branch_name], check=True)
+
+                # Create the pull request
+                pr_title = f"windock {self.new_version}"
+                pr_body = f"""WinDock is a Windows 11-style taskbar for macOS.
+
+**Cask Details:**
+- Version: {self.new_version}
+- Homepage: https://github.com/barnuri/win-dock
+- Download URL: https://github.com/barnuri/win-dock/releases/download/v{self.new_version}/WinDock.zip
+
+**Testing:**
+- [x] Cask passes `brew audit --new --cask windock`
+- [x] Cask installs correctly
+- [x] Application launches successfully
+
+This cask provides a convenient way for macOS users to install WinDock via Homebrew.
+"""
+
+                pr_result = subprocess.run(
+                    ["gh", "pr", "create", "--title", pr_title, "--body", pr_body, "--repo", "Homebrew/homebrew-cask"],
+                    capture_output=True,
+                    text=True,
+                )
+
+                if pr_result.returncode == 0:
+                    pr_url = pr_result.stdout.strip()
+                    print(f"✅ Pull request created successfully: {pr_url}")
+                else:
+                    print(f"⚠️ Failed to create pull request: {pr_result.stderr}")
+                    print(f"Branch '{branch_name}' has been pushed to your fork.")
+                    print("You can create the pull request manually on GitHub.")
+
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                print("⚠️ GitHub CLI not found. Please install 'gh' to automatically create pull requests.")
+                print(f"Branch '{branch_name}' created locally.")
+                print("To submit manually:")
+                print("1. Fork https://github.com/Homebrew/homebrew-cask")
+                print(f"2. Push branch '{branch_name}' to your fork")
+                print("3. Create a pull request on GitHub")
+
+        except subprocess.CalledProcessError as e:
+            print(f"⚠️ Error during Homebrew submission: {e}")
+            print("Please submit the cask manually to Homebrew.")
+        except Exception as e:
+            print(f"⚠️ Error during Homebrew submission: {e}")
+        finally:
+            # Clean up and return to original directory
+            os.chdir(original_dir)
+            if homebrew_cask_dir.exists():
+                try:
+                    shutil.rmtree(homebrew_cask_dir)
+                except Exception:
+                    print(f"⚠️ Could not clean up temp directory: {homebrew_cask_dir}")
+
+    def update_cask_checksum(self, cask_path):
+        """Update the SHA256 checksum in the cask file."""
+        try:
+            # Download the ZIP file to calculate its checksum
+            zip_url = f"https://github.com/barnuri/win-dock/releases/download/v{self.new_version}/WinDock.zip"
+
+            print(f"📥 Downloading {zip_url} to calculate checksum...")
+            download_result = subprocess.run(
+                ["curl", "-L", "-o", "/tmp/WinDock.zip", zip_url], capture_output=True, text=True
+            )
+
+            if download_result.returncode != 0:
+                print("⚠️ Could not download ZIP file for checksum calculation")
+                return
+
+            # Calculate SHA256
+            checksum_result = subprocess.run(
+                ["shasum", "-a", "256", "/tmp/WinDock.zip"], capture_output=True, text=True, check=True
+            )
+
+            sha256 = checksum_result.stdout.split()[0]
+            print(f"🔍 Calculated SHA256: {sha256}")
+
+            # Update the cask file
+            with open(cask_path, "r") as f:
+                content = f.read()
+
+            # Replace the sha256 line
+            updated_content = re.sub(r"sha256 :no_check", f'sha256 "{sha256}"', content)
+
+            with open(cask_path, "w") as f:
+                f.write(updated_content)
+
+            print("✅ Updated cask with calculated checksum")
+
+            # Clean up temporary file
+            try:
+                os.unlink("/tmp/WinDock.zip")
+            except Exception:
+                pass
+
+        except subprocess.CalledProcessError as e:
+            print(f"⚠️ Error calculating checksum: {e}")
+            print("Using :no_check for SHA256")
+        except Exception as e:
+            print(f"⚠️ Error updating checksum: {e}")
+
     def cleanup(self):
         """Clean up temporary files created during the release process."""
         print("🧹 Cleaning up...")
@@ -634,6 +876,7 @@ def main():
         print("Reverting Info.plist to the original version...")
         # use git to reset the file
         subprocess.run(["git", "restore", str(release_manager.info_plist_path)], check=True)
+
 
 if __name__ == "__main__":
     main()

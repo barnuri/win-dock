@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UserNotifications
 
 struct SettingsView: View {
     @StateObject private var dockManager = MacOSDockManager()
@@ -20,6 +21,11 @@ struct SettingsView: View {
             AppsSettingsTab()
                 .tabItem {
                     Label("Apps", systemImage: "app.badge")
+                }
+
+            NotificationSettingsTab()
+                .tabItem {
+                    Label("Notifications", systemImage: "bell.badge")
                 }
 
             BackupSettingsTab(settingsManager: settingsManager)
@@ -269,7 +275,7 @@ struct GeneralSettingsTab: View {
             for (index, script) in scripts.enumerated() {
                 if let appleScript = NSAppleScript(source: script) {
                     var error: NSDictionary?
-                    let result = appleScript.executeAndReturnError(&error)
+                    let _ = appleScript.executeAndReturnError(&error)
                     
                     if let error = error {
                         let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
@@ -633,6 +639,292 @@ struct AppsSettingsTab: View {
             }
             .font(.caption)
         }
+    }
+}
+
+struct NotificationSettingsTab: View {
+    @StateObject private var notificationManager = NotificationPositionManager.shared
+    @State private var showPermissionAlert = false
+    @State private var testPosition: NotificationPosition = .topRight
+    
+    var body: some View {
+        Form {
+            enabledSection
+            positionSection
+            permissionSection
+            testingSection
+            informationSection
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .alert("Accessibility Permission Required", isPresented: $showPermissionAlert) {
+            Button("Open System Preferences") {
+                openSystemPreferences()
+            }
+            Button("Later", role: .cancel) { }
+        } message: {
+            Text("WinDock needs accessibility permission to manage notification positions. Please enable accessibility access for WinDock in System Preferences > Security & Privacy > Privacy > Accessibility.")
+        }
+    }
+    
+    private var enabledSection: some View {
+        Section("Notification Position Management") {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Manage notification position", isOn: $notificationManager.isEnabled)
+                    .onChange(of: notificationManager.isEnabled) { _, newValue in
+                        updateNotificationSettings(enabled: newValue)
+                    }
+                
+                if notificationManager.isEnabled {
+                    Text("WinDock will automatically position macOS notifications based on your preference.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Notifications will appear in their default position (top-right).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+    
+    private var positionSection: some View {
+        Section("Notification Position") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Choose where notifications should appear:")
+                    .font(.subheadline)
+                
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
+                    ForEach(NotificationPosition.allCases, id: \.self) { position in
+                        Button(action: {
+                            updateNotificationSettings(position: position)
+                        }) {
+                            VStack(spacing: 4) {
+                                Image(systemName: systemImageForPosition(position))
+                                    .font(.title2)
+                                    .foregroundColor(notificationManager.currentPosition == position ? .white : .primary)
+                                
+                                Text(position.displayName)
+                                    .font(.caption)
+                                    .foregroundColor(notificationManager.currentPosition == position ? .white : .secondary)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .frame(height: 60)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(notificationManager.currentPosition == position ? Color.accentColor : Color.gray.opacity(0.1))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(notificationManager.currentPosition == position ? Color.accentColor : Color.gray.opacity(0.3), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!notificationManager.isEnabled)
+                    }
+                }
+            }
+        }
+    }
+    
+    private var permissionSection: some View {
+        Section("Permissions") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Accessibility Permission")
+                            .font(.headline)
+                        Text("Required to detect and move notification windows")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    Spacer()
+                    
+                    Button("Request Permission") {
+                        requestAccessibilityPermission()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                
+                if let error = notificationManager.lastError {
+                    Text("Error: \(error)")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .padding(.top, 4)
+                }
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Setup Instructions:")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    
+                    Group {
+                        Text("1. Click 'Request Permission' above")
+                        Text("2. Open System Preferences > Security & Privacy")
+                        Text("3. Go to Privacy > Accessibility")
+                        Text("4. Click the lock icon and enter your password")
+                        Text("5. Enable WinDock in the list")
+                        Text("6. Restart WinDock if needed")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 8)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+    
+    private var testingSection: some View {
+        Section("Test Notifications") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Test your notification position settings")
+                    .font(.subheadline)
+                
+                Button("Show Test Notification") {
+                    showTestNotification()
+                }
+                .buttonStyle(.bordered)
+                .disabled(!notificationManager.isEnabled)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("This will create a test notification to verify your position settings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    
+                    Text("Note: You may need to enable notifications for WinDock in System Preferences > Notifications & Focus if this is your first time using the test feature.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+    
+    private var informationSection: some View {
+        Section("Information") {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Notification position changes apply to new notifications", systemImage: "info.circle")
+                Label("Existing notifications won't be moved retroactively", systemImage: "clock")
+                Label("Position changes take effect immediately", systemImage: "bolt")
+                Label("Works with all macOS notification styles", systemImage: "bell")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+    
+    private func systemImageForPosition(_ position: NotificationPosition) -> String {
+        switch position {
+        case .topLeft: return "rectangle.lefthalf.inset.filled.arrow.left"
+        case .topMiddle: return "rectangle.tophalf.inset.filled.arrow.up"
+        case .topRight: return "rectangle.righthalf.inset.filled.arrow.right"
+        case .middleLeft: return "rectangle.lefthalf.inset.filled"
+        case .deadCenter: return "rectangle.inset.filled"
+        case .middleRight: return "rectangle.righthalf.inset.filled"
+        case .bottomLeft: return "rectangle.lefthalf.inset.filled.arrow.left"
+        case .bottomMiddle: return "rectangle.bottomhalf.inset.filled.arrow.down"
+        case .bottomRight: return "rectangle.righthalf.inset.filled.arrow.right"
+        }
+    }
+    
+    private func updateNotificationSettings(enabled: Bool? = nil, position: NotificationPosition? = nil) {
+        let newEnabled = enabled ?? notificationManager.isEnabled
+        let newPosition = position ?? notificationManager.currentPosition
+        
+        notificationManager.updateSettings(enabled: newEnabled, position: newPosition)
+    }
+    
+    private func requestAccessibilityPermission() {
+        notificationManager.requestAccessibilityPermissions()
+        
+        // Check permission status after a brief delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if !notificationManager.checkAccessibilityPermissions() {
+                showPermissionAlert = true
+            }
+        }
+    }
+    
+    private func openSystemPreferences() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+    
+    private func showTestNotification() {
+        // Request notification permission if needed
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    AppLogger.shared.error("Failed to request notification permission: \(error)")
+                    self.showNotificationPermissionAlert(error: error)
+                    return
+                }
+                
+                guard granted else {
+                    AppLogger.shared.warning("Notification permission not granted")
+                    self.showNotificationPermissionAlert(error: nil)
+                    return
+                }
+                
+                // Create notification content
+                let content = UNMutableNotificationContent()
+                content.title = "WinDock Test Notification"
+                content.body = "This is a test notification to verify your position settings."
+                content.sound = .default
+                
+                // Create request
+                let request = UNNotificationRequest(
+                    identifier: "windock-test-\(Date().timeIntervalSince1970)",
+                    content: content,
+                    trigger: nil // Show immediately
+                )
+                
+                // Schedule notification
+                UNUserNotificationCenter.current().add(request) { error in
+                    DispatchQueue.main.async {
+                        if let error = error {
+                            AppLogger.shared.error("Failed to schedule test notification: \(error)")
+                            self.showNotificationErrorAlert(error: error)
+                        } else {
+                            AppLogger.shared.info("Test notification delivered for position: \(self.notificationManager.currentPosition.displayName)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func showNotificationPermissionAlert(error: Error?) {
+        let alert = NSAlert()
+        alert.messageText = "Notification Permission Required"
+        
+        if let error = error {
+            alert.informativeText = "Failed to request notification permission: \(error.localizedDescription)\n\nTo enable notifications:\n1. Open System Preferences\n2. Go to Notifications & Focus\n3. Find WinDock in the list\n4. Enable 'Allow Notifications'"
+        } else {
+            alert.informativeText = "WinDock needs permission to show test notifications. Please enable notifications in System Preferences:\n\n1. Open System Preferences\n2. Go to Notifications & Focus\n3. Find WinDock in the list\n4. Enable 'Allow Notifications'"
+        }
+        
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Open System Preferences")
+        alert.addButton(withTitle: "OK")
+        
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            // Open Notifications preferences
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+        }
+    }
+    
+    private func showNotificationErrorAlert(error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Test Notification Failed"
+        alert.informativeText = "Failed to show test notification: \(error.localizedDescription)"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
 

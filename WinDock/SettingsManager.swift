@@ -20,6 +20,8 @@ struct AppSettings: Codable {
     var defaultBrowser: String = "com.apple.Safari"
     var defaultTerminal: String = "com.apple.Terminal"
     var logLevel: String = "info"
+    var notificationPositionEnabled: Bool = false
+    var notificationPosition: String = "topRight"
     
     // Additional settings can be added here
     var exportDate: Date = Date()
@@ -53,6 +55,8 @@ class SettingsManager: ObservableObject {
             defaultBrowser: userDefaults.string(forKey: "defaultBrowser") ?? "com.apple.Safari",
             defaultTerminal: userDefaults.string(forKey: "defaultTerminal") ?? "com.apple.Terminal",
             logLevel: userDefaults.string(forKey: "logLevel") ?? "info",
+            notificationPositionEnabled: userDefaults.bool(forKey: "notificationPositionEnabled"),
+            notificationPosition: userDefaults.string(forKey: "notificationPosition") ?? "topRight",
             exportDate: Date(),
             version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         )
@@ -144,6 +148,8 @@ class SettingsManager: ObservableObject {
             userDefaults.set(settings.defaultBrowser, forKey: "defaultBrowser")
             userDefaults.set(settings.defaultTerminal, forKey: "defaultTerminal")
             userDefaults.set(settings.logLevel, forKey: "logLevel")
+            userDefaults.set(settings.notificationPositionEnabled, forKey: "notificationPositionEnabled")
+            userDefaults.set(settings.notificationPosition, forKey: "notificationPosition")
             
             // Synchronize UserDefaults
             userDefaults.synchronize()
@@ -168,7 +174,8 @@ class SettingsManager: ObservableObject {
             "dockPosition", "dockSize", "autoHide", "showOnAllSpaces", "centerTaskbarIcons",
             "showSystemTray", "showTaskView", "combineTaskbarButtons", "useSmallTaskbarButtons",
             "taskbarTransparency", "showLabels", "animationSpeed", "use24HourClock", "dateFormat",
-            "searchAppChoice", "defaultBrowser", "defaultTerminal", "logLevel"
+            "searchAppChoice", "defaultBrowser", "defaultTerminal", "logLevel",
+            "notificationPositionEnabled", "notificationPosition"
         ]
         
         for key in keys {

@@ -31,3 +31,5 @@ WinDock/WinDockApp.swift
 *.xcbkptlist
 WinDock.xcodeproj/xcuserdata
 default.profraw
+__pycache__
+*.pyc

@@ -129,12 +129,6 @@ struct StartMenuView: View {
                         icon: "grid.circle.fill",
                         action: openLaunchpad
                     )
-                    
-                    StartMenuButton(
-                        title: "Spotlight Search",
-                        icon: "magnifyingglass",
-                        action: openSpotlight
-                    )
                 }
             }
             .padding(.bottom, 8)
@@ -391,17 +385,7 @@ struct StartMenuView: View {
         executeAppleScript(script)
         dismiss()
     }
-    
-    private func openSpotlight() {
-        let script = """
-        tell application "System Events"
-            key code 49 using {command down}
-        end tell
-        """
-        executeAppleScript(script)
-        dismiss()
-    }
-    
+      
     private func openWinDockSettings() {
         AppLogger.shared.info("Opening WinDock settings from StartMenuView")
         SettingsHelper.shared.requestOpenSettings()

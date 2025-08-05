@@ -4,6 +4,12 @@ A feature-rich macOS SwiftUI application that emulates the Windows 11 style task
 
 ![Win Dock Taskbar](screenshots/dock.png)
 
+## 🍺 Quick Install
+
+```bash
+brew install --cask windock
+```
+
 ## Requirements
 
 -   macOS 14 Sonoma or later
@@ -75,7 +81,32 @@ cd win-dock
 
 ## Installation
 
-### Method 1: Using the Run Script
+### Method 1: Homebrew (Recommended)
+
+Install WinDock using Homebrew cask:
+
+```bash
+brew install --cask windock
+```
+
+**Note:** The cask is currently set up for local development. For a production-ready cask in the main Homebrew repository, the app would need to be:
+
+-   Properly signed and notarized by Apple
+-   Have stable releases with SHA256 checksums
+-   Follow all Homebrew cask guidelines
+
+You can also install from a local cask file for testing:
+
+```bash
+# Clone the repository first
+git clone https://github.com/barnuri/win-dock.git
+cd win-dock
+
+# Use the setup script for Homebrew configuration
+./setup_homebrew.sh
+```
+
+### Method 2: Using the Run Script
 
 ```bash
 git clone https://github.com/barnuri/win-dock.git
@@ -83,7 +114,7 @@ cd win-dock
 ./run.sh
 ```
 
-### Method 2: Build and Run in Xcode
+### Method 3: Build and Run in Xcode
 
 ```bash
 git clone https://github.com/barnuri/win-dock.git
@@ -93,7 +124,7 @@ open WinDock.xcodeproj
 
 Then press ⌘R to build and run the app.
 
-### Method 3: Download Release
+### Method 4: Download Release
 
 1. Go to the [Releases](https://github.com/barnuri/win-dock/releases) page
 2. Download the latest version
