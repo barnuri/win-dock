@@ -725,15 +725,6 @@ brew install windock --no-quarantine
             original_dir = os.getcwd()
             os.chdir(homebrew_tap_dir)
 
-            # Create a new branch for the formula update
-            branch_name = f"windock-{self.new_version}"
-
-            # Delete branch if it exists
-            subprocess.run(["git", "checkout", "-D", branch_name], check=False)
-
-            # Create a new branch for the formula submission
-            subprocess.run(["git", "checkout", "-b", branch_name], check=True)
-
             # Ensure Formula directory exists
             formula_dir = homebrew_tap_dir / "Formula"
             formula_dir.mkdir(exist_ok=True)
@@ -769,70 +760,8 @@ brew install windock --no-quarantine
             # Check if we have GitHub CLI
             subprocess.run(["gh", "--version"], capture_output=True, check=True)
 
-            # Create the remote repository if it doesn't exist
-            try:
-                subprocess.run(["gh", "repo", "view", "barnuri/homebrew-windock"], capture_output=True, check=True)
-                print("📍 Homebrew tap repository already exists")
-            except subprocess.CalledProcessError:
-                print("📝 Creating homebrew tap repository...")
-                subprocess.run(
-                    [
-                        "gh",
-                        "repo",
-                        "create",
-                        "barnuri/homebrew-windock",
-                        "--public",
-                        "--description",
-                        "Homebrew tap for WinDock",
-                        "--source",
-                        ".",
-                    ],
-                    check=True,
-                )
-
-            # Add remote origin if it doesn't exist
-            try:
-                subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, check=True)
-            except subprocess.CalledProcessError:
-                subprocess.run(
-                    ["git", "remote", "add", "origin", "https://github.com/barnuri/homebrew-brew.git"], check=True
-                )
-
             # Push the branch
-            subprocess.run(["git", "push", "-u", "origin", branch_name], check=True)
-
-            # Create the pull request
-            pr_title = f"windock {self.new_version}"
-            pr_body = f"""Update WinDock to version {self.new_version}
-
-**Formula Details:**
-- Version: {self.new_version}
-- Homepage: https://github.com/barnuri/win-dock
-- Download URL: https://github.com/barnuri/win-dock/releases/download/v{self.new_version}/WinDock.zip
-
-**Testing:**
-- [x] Formula passes `brew audit --strict windock`
-- [x] Formula installs correctly
-- [x] Application launches successfully
-
-This update provides the latest version of WinDock via the Homebrew tap.
-"""
-
-            try:
-                pr_result = subprocess.run(
-                    ["gh", "pr", "create", "--title", pr_title, "--body", pr_body],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                pr_url = pr_result.stdout.strip()
-                print(f"✅ Pull request created successfully: {pr_url}")
-            except subprocess.CalledProcessError:
-                # If PR creation fails, it might be because we're in our own repo
-                # Just push the changes and let the user know
-                print(f"✅ Formula updated and pushed to branch {branch_name}")
-                print("🔗 Repository: https://github.com/barnuri/homebrew-brew")
-                print("📝 You can now merge the changes or create a PR manually if needed")
+            subprocess.run(["git", "push", "-u", "origin", "master"], check=True)
 
         except Exception as e:
             print(f"⚠️ Warning: Homebrew tap submission failed: {e}")
