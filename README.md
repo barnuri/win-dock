@@ -7,7 +7,8 @@ A feature-rich macOS SwiftUI application that emulates the Windows 11 style task
 ## 🍺 Quick Install
 
 ```bash
-brew install --cask windock
+brew tap barnuri/brew
+brew install windock --no-quarantine
 ```
 
 ## Requirements
@@ -83,27 +84,31 @@ cd win-dock
 
 ### Method 1: Homebrew (Recommended)
 
-Install WinDock using Homebrew cask:
+Install WinDock using Homebrew tap:
 
 ```bash
-brew install --cask windock
+brew tap barnuri/brew
+brew install windock --no-quarantine
 ```
 
-**Note:** The cask is currently set up for local development. For a production-ready cask in the main Homebrew repository, the app would need to be:
-
--   Properly signed and notarized by Apple
--   Have stable releases with SHA256 checksums
--   Follow all Homebrew cask guidelines
-
-You can also install from a local cask file for testing:
+After installation, you can run WinDock with:
 
 ```bash
-# Clone the repository first
-git clone https://github.com/barnuri/win-dock.git
-cd win-dock
+open "$(brew --prefix)/WinDock.app"
+```
 
-# Use the setup script for Homebrew configuration
-./setup_homebrew.sh
+Or create a symlink to Applications:
+
+```bash
+ln -sf "$(brew --prefix)/WinDock.app" /Applications/WinDock.app
+```
+
+#### Migrating from Cask
+
+If you previously installed WinDock via cask, use the migration script:
+
+```bash
+./migrate_to_tap.sh
 ```
 
 ### Method 2: Using the Run Script
