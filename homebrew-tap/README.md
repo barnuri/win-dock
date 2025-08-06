@@ -13,7 +13,7 @@ brew tap barnuri/brew
 Then install WinDock:
 
 ```bash
-brew install windock --no-quarantine
+brew install barnuri/brew/windock --no-quarantine
 ```
 
 ## Usage

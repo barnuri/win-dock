@@ -8,7 +8,7 @@ A feature-rich macOS SwiftUI application that emulates the Windows 11 style task
 
 ```bash
 brew tap barnuri/brew
-brew install windock --no-quarantine
+brew install barnuri/brew/windock --no-quarantine
 ```
 
 ## Requirements
@@ -88,7 +88,7 @@ Install WinDock using Homebrew tap:
 
 ```bash
 brew tap barnuri/brew
-brew install windock --no-quarantine
+brew install barnuri/brew/windock --no-quarantine
 ```
 
 After installation, you can run WinDock with:

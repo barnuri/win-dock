@@ -708,7 +708,7 @@ This is the official Homebrew tap for WinDock.
 
 ```bash
 brew tap barnuri/brew
-brew install windock --no-quarantine
+brew install barnuri/brew/windock --no-quarantine
 ```
 """
                     with open(homebrew_tap_dir / "README.md", "w") as f:
