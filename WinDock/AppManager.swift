@@ -4,6 +4,28 @@ import Combine
 import Accessibility
 import ApplicationServices
 
+// Private API declarations
+@_silgen_name("CGSGetWindowLevel")
+func CGSGetWindowLevel(_ cid: CGSConnectionID, _ wid: CGWindowID, _ level: UnsafeMutablePointer<CGWindowLevel>) -> CGError
+
+@_silgen_name("_AXUIElementGetWindow")
+func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
+
+@_silgen_name("_AXUIElementCreateWithRemoteToken")
+func _AXUIElementCreateWithRemoteToken(_ token: CFData) -> Unmanaged<AXUIElement>?
+
+// Missing AX attribute constants
+let kAXFullscreenAttribute = "AXFullScreen" as CFString
+
+// Window attributes structure to hold AX API results
+struct WindowAttributes {
+    let title: String?
+    let role: String?
+    let subrole: String?
+    let isMinimized: Bool
+    let isFullscreen: Bool
+}
+
 struct DockApp: Identifiable, Hashable {
     var id: String { bundleIdentifier }
     let bundleIdentifier: String
@@ -243,47 +265,69 @@ class AppManager: ObservableObject {
     private func getWindowsForApp(_ app: NSRunningApplication) -> [WindowInfo] {
         var windows: [WindowInfo] = []
         
-        // Use Core Graphics to get window information - include both on-screen and off-screen windows
-        guard let windowList = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+        // Create AXUIElement for the application
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        
+        // Get AX windows using accessibility API (like alt-tab-macos)
+        let axWindows = getAXWindows(axApp: axApp, pid: app.processIdentifier)
+        
+        // Also get Core Graphics windows for comparison and additional info
+        guard let cgWindowList = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
             return windows
         }
         
-        for windowInfo in windowList {
-            guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
-                  ownerPID == app.processIdentifier else { continue }
+        // Process AX windows and match with CG window info
+        for axWindow in axWindows {
+            // Get window ID through AX API
+            guard let windowID = getWindowID(from: axWindow) else { continue }
             
-            guard let windowID = windowInfo[kCGWindowNumber as String] as? CGWindowID,
-                  let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: Any],
-                  let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+            // Get window attributes from AX API
+            guard let windowAttributes = getWindowAttributes(from: axWindow) else { continue }
             
-            let title = windowInfo[kCGWindowName as String] as? String ?? ""
-            let isOnScreen = windowInfo[kCGWindowIsOnscreen as String] as? Bool ?? false
-            let alpha = windowInfo[kCGWindowAlpha as String] as? CGFloat ?? 1.0
-            let layer = windowInfo[kCGWindowLayer as String] as? Int ?? 0
+            // Find matching CG window for additional info
+            var cgWindowInfo: [String: Any]?
+            for info in cgWindowList {
+                if let cgWindowID = info[kCGWindowNumber as String] as? CGWindowID,
+                   cgWindowID == windowID,
+                   let ownerPID = info[kCGWindowOwnerPID as String] as? Int32,
+                   ownerPID == app.processIdentifier {
+                    cgWindowInfo = info
+                    break
+                }
+            }
             
-            // Pre-filter obviously windowless entries before detailed checking
-            guard windowID > 0,
-                  bounds.width > 0 && bounds.height > 0,
-                  alpha >= 0 else { continue }
+            // Get bounds from CG info or calculate from AX
+            let bounds: CGRect
+            if let cgInfo = cgWindowInfo,
+               let boundsDict = cgInfo[kCGWindowBounds as String] as? [String: Any],
+               let cgBounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) {
+                bounds = cgBounds
+            } else {
+                // Fallback: get position and size from AX API
+                bounds = getWindowBounds(from: axWindow) ?? CGRect.zero
+            }
             
-            // Filter out system windows, splash screens, and other non-user windows
-            if shouldIncludeWindow(
-                bounds: bounds,
-                title: title,
-                isOnScreen: isOnScreen,
-                alpha: alpha,
-                layer: layer,
+            let isOnScreen = cgWindowInfo?[kCGWindowIsOnscreen as String] as? Bool ?? false
+            let level = getWindowLevel(windowID: windowID)
+            
+            // Apply alt-tab-macos filtering logic using AX attributes
+            if isActualWindow(
+                axWindow: axWindow,
+                windowID: windowID,
+                level: level,
+                title: windowAttributes.title,
+                subrole: windowAttributes.subrole,
+                role: windowAttributes.role,
+                size: bounds.size,
+                isMinimized: windowAttributes.isMinimized,
+                isFullscreen: windowAttributes.isFullscreen,
                 app: app
             ) {
-                // Determine if window is minimized
-                // A window is considered minimized if it's not on screen but has reasonable bounds
-                let isMinimized = !isOnScreen && bounds.width >= 100 && bounds.height >= 100
-                
                 let window = WindowInfo(
-                    title: title,
+                    title: windowAttributes.title ?? "",
                     windowID: windowID,
                     bounds: bounds,
-                    isMinimized: isMinimized,
+                    isMinimized: windowAttributes.isMinimized,
                     isOnScreen: isOnScreen
                 )
                 
@@ -294,105 +338,314 @@ class AppManager: ObservableObject {
         return windows
     }
     
-    private func shouldIncludeWindow(
-        bounds: CGRect,
-        title: String,
-        isOnScreen: Bool,
-        alpha: CGFloat,
-        layer: Int,
-        app: NSRunningApplication
-    ) -> Bool {
-        // Skip windows that are too small to be real user windows
-        if bounds.width < 100 || bounds.height < 100 {
-            return false
+    /// Gets AX windows using accessibility API like alt-tab-macos
+    private func getAXWindows(axApp: AXUIElement, pid: pid_t) -> [AXUIElement] {
+        var axWindows: [AXUIElement] = []
+        
+        // Get windows using standard AX API
+        var windowListRef: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowListRef)
+        
+        if result == .success, let windowList = windowListRef as? [AXUIElement] {
+            axWindows.append(contentsOf: windowList)
         }
         
-        // Skip very transparent windows unless they're minimized
-        if alpha < 0.1 && isOnScreen {
-            return false
-        }
+        // Also try brute-force approach like alt-tab-macos for windows on other spaces
+        axWindows.append(contentsOf: getWindowsByBruteForce(pid: pid))
         
-        // Skip system layer windows (like dock, menu bar)
-        if layer < 0 {
-            return false
-        }
-        
-        // Skip completely transparent windows (likely windowless)
-        if alpha <= 0 {
-            return false
-        }
-        
-        // Skip windows with no meaningful bounds (windowless entries)
-        if bounds.width <= 0 || bounds.height <= 0 {
-            return false
-        }
-        
-        // Skip windows that are clearly utility/background windows
-        let excludedTitles = [
-            "Window",
-            "TouchBarUserInterfaceLayoutViewController", 
-            "NSToolbarFullScreenWindow",
-            "NSTextInputWindowController",
-            "StatusBarWindow",
-            "NotificationWindow",
-            "ScreenSaverWindow",
-            "",        // Empty title windows are often windowless
-            " ",       // Space-only titles
-        ]
-        
-        // Check for exact matches and partial matches for excluded titles
-        for excluded in excludedTitles {
-            if title == excluded || (excluded.count > 2 && title.contains(excluded)) {
-                return false
-            }
-        }
-        
-        // Skip windows with generic/placeholder titles that indicate windowless state
-        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedTitle.isEmpty {
-            return false
-        }
-        
-        // Skip splash screens and loading windows (usually small and temporary)
-        if title.lowercased().contains("splash") || 
-           title.lowercased().contains("loading") ||
-           title.lowercased().contains("launcher") {
-            return false
-        }
-        
-        // Special handling for specific apps
-        if let bundleId = app.bundleIdentifier {
-            switch bundleId {
-            case "com.apple.finder":
-                // Only count Finder windows that are actual folder windows
-                return !title.isEmpty && title != "Desktop"
-                
-            case "com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox":
-                // For browsers, count all reasonably sized windows with meaningful titles
-                return bounds.width >= 200 && bounds.height >= 200 && !trimmedTitle.isEmpty
-                
-            case "com.apple.dock":
-                // Never count dock windows
-                return false
-                
-            case "com.apple.systempreferences":
-                // Count System Preferences windows with actual content
-                return !trimmedTitle.isEmpty && trimmedTitle != "Window"
-                
-            case "com.apple.ActivityMonitor":
-                // Activity Monitor often has multiple utility windows
-                return !trimmedTitle.isEmpty && !trimmedTitle.contains("CPU History")
-                
-            default:
-                break
-            }
-        }
-        
-        // Include windows that are either on-screen or minimized with a reasonable size
-        return isOnScreen || (!isOnScreen && bounds.width >= 200 && bounds.height >= 150)
+        // Remove duplicates
+        return Array(Set(axWindows))
     }
     
-
+    /// Brute-force window detection like alt-tab-macos for windows on other spaces
+    private func getWindowsByBruteForce(pid: pid_t) -> [AXUIElement] {
+        var axWindows: [AXUIElement] = []
+        
+        // Create remote token for _AXUIElementCreateWithRemoteToken
+        var remoteToken = Data(count: 20)
+        remoteToken.replaceSubrange(0..<4, with: withUnsafeBytes(of: pid) { Data($0) })
+        remoteToken.replaceSubrange(4..<8, with: withUnsafeBytes(of: Int32(0)) { Data($0) })
+        remoteToken.replaceSubrange(8..<12, with: withUnsafeBytes(of: Int32(0x636f636f)) { Data($0) })
+        
+        // Try different AXUIElementID values to find windows
+        for axUiElementId: UInt in 0..<1000 {
+            remoteToken.replaceSubrange(12..<20, with: withUnsafeBytes(of: axUiElementId) { Data($0) })
+            
+            if let axUiElement = _AXUIElementCreateWithRemoteToken(remoteToken as CFData)?.takeRetainedValue() {
+                do {
+                    if let subrole = try getSubrole(from: axUiElement),
+                       [kAXStandardWindowSubrole, kAXDialogSubrole].contains(subrole) {
+                        axWindows.append(axUiElement)
+                    }
+                } catch {
+                    // Ignore errors and continue
+                }
+            }
+        }
+        
+        return axWindows
+    }
+    
+    /// Get window ID from AXUIElement using private API
+    private func getWindowID(from axWindow: AXUIElement) -> CGWindowID? {
+        var windowID: CGWindowID = 0
+        let result = _AXUIElementGetWindow(axWindow, &windowID)
+        return result == .success ? windowID : nil
+    }
+    
+    /// Get window attributes from AXUIElement
+    private func getWindowAttributes(from axWindow: AXUIElement) -> WindowAttributes? {
+        do {
+            let title = try getTitle(from: axWindow)
+            let role = try getRole(from: axWindow)
+            let subrole = try getSubrole(from: axWindow)
+            let isMinimized = try getIsMinimized(from: axWindow)
+            let isFullscreen = try getIsFullscreen(from: axWindow)
+            
+            return WindowAttributes(
+                title: title,
+                role: role,
+                subrole: subrole,
+                isMinimized: isMinimized,
+                isFullscreen: isFullscreen
+            )
+        } catch {
+            return nil
+        }
+    }
+    
+    /// Get window bounds from AXUIElement
+    private func getWindowBounds(from axWindow: AXUIElement) -> CGRect? {
+        do {
+            let position = try getPosition(from: axWindow)
+            let size = try getSize(from: axWindow)
+            
+            if let pos = position, let sz = size {
+                return CGRect(origin: pos, size: sz)
+            }
+        } catch {
+            // Ignore errors
+        }
+        return nil
+    }
+    
+    // MARK: - AX Attribute Helpers
+    
+    private func getTitle(from axWindow: AXUIElement) throws -> String? {
+        var titleRef: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(axWindow, kAXTitleAttribute as CFString, &titleRef)
+        return result == .success ? (titleRef as? String) : nil
+    }
+    
+    private func getRole(from axWindow: AXUIElement) throws -> String? {
+        var roleRef: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(axWindow, kAXRoleAttribute as CFString, &roleRef)
+        return result == .success ? (roleRef as? String) : nil
+    }
+    
+    private func getSubrole(from axWindow: AXUIElement) throws -> String? {
+        var subroleRef: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(axWindow, kAXSubroleAttribute as CFString, &subroleRef)
+        return result == .success ? (subroleRef as? String) : nil
+    }
+    
+    private func getIsMinimized(from axWindow: AXUIElement) throws -> Bool {
+        var minimizedRef: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(axWindow, kAXMinimizedAttribute as CFString, &minimizedRef)
+        return result == .success ? (minimizedRef as? Bool ?? false) : false
+    }
+    
+    private func getIsFullscreen(from axWindow: AXUIElement) throws -> Bool {
+        var fullscreenRef: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(axWindow, kAXFullscreenAttribute as CFString, &fullscreenRef)
+        return result == .success ? (fullscreenRef as? Bool ?? false) : false
+    }
+    
+    private func getPosition(from axWindow: AXUIElement) throws -> CGPoint? {
+        var positionRef: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &positionRef)
+        
+        if result == .success, let axValue = positionRef {
+            var point = CGPoint.zero
+            if AXValueGetValue(axValue as! AXValue, .cgPoint, &point) {
+                return point
+            }
+        }
+        return nil
+    }
+    
+    private func getSize(from axWindow: AXUIElement) throws -> CGSize? {
+        var sizeRef: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &sizeRef)
+        
+        if result == .success, let axValue = sizeRef {
+            var size = CGSize.zero
+            if AXValueGetValue(axValue as! AXValue, .cgSize, &size) {
+                return size
+            }
+        }
+        return nil
+    }
+    
+    /// Determines if a window is an actual user window using AX attributes (like alt-tab-macos)
+    private func isActualWindow(
+        axWindow: AXUIElement,
+        windowID: CGWindowID,
+        level: CGWindowLevel,
+        title: String?,
+        subrole: String?,
+        role: String?,
+        size: CGSize?,
+        isMinimized: Bool,
+        isFullscreen: Bool,
+        app: NSRunningApplication
+    ) -> Bool {
+        let bundleID = app.bundleIdentifier ?? ""
+        
+        // Basic validity checks
+        guard windowID > 0 else { return false }
+        
+        // Size constraints (alt-tab-macos logic)
+        guard let windowSize = size,
+              windowSize.width > 100 && windowSize.height > 50 else { return false }
+        
+        let normalLevel = CGWindowLevelForKey(.normalWindow)
+        
+        // Check for special app cases that bypass normal filtering
+        if isSpecialApp(bundleID: bundleID, title: title, role: role, subrole: subrole, level: level, size: windowSize) {
+            return true
+        }
+        
+        // Standard filtering for normal level windows
+        if level == normalLevel {
+            // Must have proper subrole for standard windows
+            if let subrole = subrole, [kAXStandardWindowSubrole, kAXDialogSubrole].contains(subrole) {
+                return isValidStandardWindow(bundleID: bundleID, title: title, size: windowSize, subrole: subrole)
+            }
+        }
+        
+        // Floating windows (only for specific apps)
+        if level == CGWindowLevelForKey(.floatingWindow) {
+            return isValidFloatingWindow(bundleID: bundleID, title: title, role: role, subrole: subrole, size: windowSize)
+        }
+        
+        return false
+    }
+    
+    /// Check for special app cases that need custom handling
+    private func isSpecialApp(bundleID: String, title: String?, role: String?, subrole: String?, level: CGWindowLevel, size: CGSize) -> Bool {
+        let normalLevel = CGWindowLevelForKey(.normalWindow)
+        
+        // Books.app has animations during window creation
+        if bundleID == "com.apple.iBooksX" {
+            return true
+        }
+        
+        // Apple Keynote fake fullscreen in presentation mode
+        if bundleID == "com.apple.iWork.Keynote" {
+            return true
+        }
+        
+        // Apple Preview can have special document windows
+        if bundleID == "com.apple.Preview" {
+            return level == normalLevel && subrole != nil && [kAXStandardWindowSubrole, kAXDialogSubrole].contains(subrole!)
+        }
+        
+        // IINA video player (can be floating)
+        if bundleID == "com.colliderli.iina" {
+            return true
+        }
+        
+        // Adobe apps with floating UI panels
+        if bundleID == "com.adobe.Audition" && subrole == kAXFloatingWindowSubrole {
+            return true
+        }
+        
+        if bundleID == "com.adobe.AfterEffects" && subrole == kAXFloatingWindowSubrole {
+            return true
+        }
+        
+        // Steam windows (all have subrole AXUnknown but are valid if they have title and role)
+        if bundleID == "com.valvesoftware.steam" {
+            return title != nil && !title!.isEmpty && role != nil
+        }
+        
+        // World of Warcraft
+        if bundleID == "com.blizzard.worldofwarcraft" && role == kAXWindowRole {
+            return true
+        }
+        
+        // Battle.net bootstrapper
+        if bundleID == "net.battle.bootstrapper" && role == kAXWindowRole {
+            return true
+        }
+        
+        // Firefox fullscreen video or special windows
+        if bundleID.hasPrefix("org.mozilla.firefox") && role == kAXWindowRole && size.height > 400 {
+            return true
+        }
+        
+        // VLC fullscreen video
+        if bundleID.hasPrefix("org.videolan.vlc") && role == kAXWindowRole {
+            return true
+        }
+        
+        // AutoCAD uses undocumented AXDocumentWindow subrole
+        if bundleID.hasPrefix("com.autodesk.AutoCAD") && subrole == "AXDocumentWindow" {
+            return true
+        }
+        
+        // JetBrains apps
+        if bundleID.hasPrefix("com.jetbrains.") || bundleID.hasPrefix("com.google.android.studio") {
+            return title != nil && !title!.isEmpty && size.width > 100 && size.height > 100
+        }
+        
+        return false
+    }
+    
+    /// Validate standard windows with proper subroles
+    private func isValidStandardWindow(bundleID: String, title: String?, size: CGSize, subrole: String) -> Bool {
+        // JetBrains apps need title and proper size
+        if bundleID.hasPrefix("com.jetbrains.") || bundleID.hasPrefix("com.google.android.studio") {
+            return title != nil && !title!.isEmpty && size.width > 100 && size.height > 100
+        }
+        
+        // ColorSlurp needs standard window subrole
+        if bundleID == "com.IdeaPunch.ColorSlurp" {
+            return subrole == kAXStandardWindowSubrole
+        }
+        
+        // Most apps just need proper subrole
+        return true
+    }
+    
+    /// Validate floating windows (only specific apps allowed)
+    private func isValidFloatingWindow(bundleID: String, title: String?, role: String?, subrole: String?, size: CGSize) -> Bool {
+        // IINA floating video windows
+        if bundleID == "com.colliderli.iina" {
+            return true
+        }
+        
+        // Adobe floating panels
+        if (bundleID == "com.adobe.Audition" || bundleID == "com.adobe.AfterEffects") && subrole == kAXFloatingWindowSubrole {
+            return true
+        }
+        
+        // scrcpy always-on-top windows (no bundle ID but specific name)
+        if bundleID.isEmpty && role == kAXWindowRole && subrole == kAXStandardWindowSubrole {
+            return true
+        }
+        
+        return false
+    }
+    
+    private func getWindowLevel(windowID: CGWindowID) -> CGWindowLevel {
+        var level: CGWindowLevel = 0
+        let cgsConnection = CGSMainConnectionID()
+        _ = CGSGetWindowLevel(cgsConnection, windowID, &level)
+        return level
+    }
+    
     
     // MARK: - Dock App Order Persistence
 
