@@ -432,18 +432,37 @@ class AppManager: ObservableObject {
                 if let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
                    ownerPID == runningApp.processIdentifier {
                     
+                    // Get the proper app name for AppleScript
+                    let scriptAppName = runningApp.localizedName ?? app.name
+                    
                     // Use AppleScript to focus the specific window by title
                     if let windowName = windowInfo[kCGWindowName as String] as? String, !windowName.isEmpty {
                         let script = """
-                        tell application "\(app.name)"
-                            activate
-                            try
-                                set index of window "\(windowName)" to 1
-                            on error
-                                -- Fallback: just activate the app
+                        try
+                            tell application "\(scriptAppName)"
                                 activate
+                                try
+                                    set index of window "\(windowName)" to 1
+                                end try
+                            end tell
+                        on error
+                            -- Fallback: try with bundle identifier
+                            try
+                                tell application id "\(app.bundleIdentifier)"
+                                    activate
+                                    try
+                                        set index of window "\(windowName)" to 1
+                                    end try
+                                end tell
+                            on error
+                                -- Final fallback: just activate the app
+                                tell application "System Events"
+                                    tell process "\(scriptAppName)"
+                                        set frontmost to true
+                                    end tell
+                                end tell
                             end try
-                        end tell
+                        end try
                         """
                         
                         if let appleScript = NSAppleScript(source: script) {
@@ -457,12 +476,22 @@ class AppManager: ObservableObject {
                         // Fallback: use System Events to bring window to front
                         let script = """
                         tell application "System Events"
-                            tell process "\(app.name)"
-                                set frontmost to true
-                                try
-                                    perform action "AXRaise" of window 1
-                                end try
-                            end tell
+                            try
+                                tell process "\(scriptAppName)"
+                                    set frontmost to true
+                                    if (count of windows) > 0 then
+                                        perform action "AXRaise" of window 1
+                                    end if
+                                end tell
+                            on error
+                                -- Try with the display name as fallback
+                                tell process "\(app.name)"
+                                    set frontmost to true
+                                    if (count of windows) > 0 then
+                                        perform action "AXRaise" of window 1
+                                    end if
+                                end tell
+                            end try
                         end tell
                         """
                         
@@ -482,7 +511,8 @@ class AppManager: ObservableObject {
     }
 
     func activateApp(_ app: DockApp) {
-        AppLogger.shared.info("activateApp called for \(app.name), isRunning: \(app.isRunning), isActive: \(app.runningApplication?.isActive ?? false)")
+        AppLogger.shared.info("activateApp called for \(app.name), isRunning: \(app.isRunning), windowCount: \(app.windowCount), isActive: \(app.runningApplication?.isActive ?? false)")
+        
         if let runningApp = app.runningApplication {
             // Force app to front and activate
             AppLogger.shared.info("Activating running app: \(app.name)")
@@ -492,6 +522,18 @@ class AppManager: ObservableObject {
                 runningApp.unhide()
             }
             
+            // Check if the app has no windows - if so, just use NSRunningApplication activation
+            // This prevents AppleScript errors when apps have no windows to activate
+            if app.windowCount == 0 {
+                AppLogger.shared.info("App \(app.name) has no windows - using NSRunningApplication activation only")
+                if #available(macOS 14.0, *) {
+                    runningApp.activate()
+                } else {
+                    runningApp.activate(options: [.activateIgnoringOtherApps])
+                }
+                return
+            }
+            
             // Activate with all available options to ensure it comes to front
             if #available(macOS 14.0, *) {
                 runningApp.activate()
@@ -499,18 +541,42 @@ class AppManager: ObservableObject {
                 runningApp.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
             }
             
+            // Get the proper app name for AppleScript - use localized name from running app or bundle identifier as fallback
+            let scriptAppName = runningApp.localizedName ?? app.name
+            
             // Use AppleScript to ensure the app is brought to the very front
+            // Only use AppleScript when the app has windows
             let bringToFrontScript = """
-            tell application "\(app.name)"
-                activate
-            end tell
-            tell application "System Events"
-                tell process "\(app.name)"
-                    set frontmost to true
-                    try
-                        perform action "AXRaise" of window 1
-                    end try
+            try
+                tell application "\(scriptAppName)"
+                    activate
                 end tell
+            on error
+                -- If direct app activation fails, try with bundle identifier
+                tell application id "\(app.bundleIdentifier)"
+                    activate
+                end tell
+            end try
+            
+            -- Use System Events as additional fallback for bringing windows to front
+            tell application "System Events"
+                try
+                    tell process "\(scriptAppName)"
+                        set frontmost to true
+                        -- Only try to raise windows if they exist
+                        if (count of windows) > 0 then
+                            perform action "AXRaise" of window 1
+                        end if
+                    end tell
+                on error
+                    -- If process name doesn't work, try with localized name
+                    tell process "\(app.name)"
+                        set frontmost to true
+                        if (count of windows) > 0 then
+                            perform action "AXRaise" of window 1
+                        end if
+                    end tell
+                end try
             end tell
             """
             
@@ -520,6 +586,14 @@ class AppManager: ObservableObject {
                     appleScript.executeAndReturnError(&error)
                     if let error = error {
                         AppLogger.shared.error("Bring to front AppleScript error: \(error)")
+                        
+                        // If AppleScript fails completely, just rely on NSRunningApplication activation
+                        AppLogger.shared.info("Falling back to NSRunningApplication activation only")
+                        if #available(macOS 14.0, *) {
+                            runningApp.activate()
+                        } else {
+                            runningApp.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
+                        }
                     }
                 }
                 
