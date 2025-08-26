@@ -5,7 +5,7 @@ import Accessibility
 import ApplicationServices
 
 struct DockApp: Identifiable, Hashable {
-    let id = UUID()
+    var id: String { bundleIdentifier }
     let bundleIdentifier: String
     let name: String
     let icon: NSImage?

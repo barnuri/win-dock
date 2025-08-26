@@ -10,7 +10,6 @@ struct AppDockItem: View {
     @State private var isHovering = false
     @State private var isDragging = false
     @State private var showWindowPreview = false
-    @State private var hoverTimer: Timer?
 
     // Computed properties for cleaner state management
     private var isActiveApp: Bool { 
@@ -42,10 +41,13 @@ struct AppDockItem: View {
         .scaleEffect(isDragging ? 1.05 : isHovering ? 1.02 : 1.0)
         .opacity(isDragging ? 0.8 : 1.0)
         .contentShape(Rectangle())
-        .onHover(perform: handleHover)
+        .background(
+            MouseTrackingView { isInside in
+                handleMouseTracking(isInside)
+            }
+        )
         .popover(isPresented: $showWindowPreview, arrowEdge: .top) {
             WindowPreviewView(app: app, appManager: appManager)
-                .onDisappear { cleanupHoverTimer() }
         }
         .onTapGesture(perform: handleTap)
         .contextMenu {
@@ -62,7 +64,6 @@ struct AppDockItem: View {
         .animation(.easeOut(duration: 0.15), value: isDragging)
         .animation(.easeOut(duration: 0.1), value: isHovering)
         .help(toolTip)
-        .onDisappear { cleanupHoverTimer() }
     }
     
     // MARK: - View Components
@@ -202,25 +203,9 @@ struct AppDockItem: View {
     
     // MARK: - Event Handlers
     
-    private func cleanupHoverTimer() {
-        hoverTimer?.invalidate()
-        hoverTimer = nil
-    }
-    
-    private func handleHover(_ hovering: Bool) {
-        isHovering = hovering
-        
-        if hovering && app.isRunning {
-            cleanupHoverTimer()
-            hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { _ in
-                if isHovering {
-                    showWindowPreview = true
-                }
-            }
-        } else {
-            cleanupHoverTimer()
-            showWindowPreview = false
-        }
+    private func handleMouseTracking(_ isInside: Bool) {
+        isHovering = isInside
+        showWindowPreview = isInside
     }
     
     private func handleTap() {
@@ -269,5 +254,56 @@ struct AppDockItem: View {
             return nil
         }
         return itemProvider
+    }
+}
+
+// MARK: - Mouse Tracking Helper
+
+struct MouseTrackingView: NSViewRepresentable {
+    let onMouseChange: (Bool) -> Void
+    
+    func makeNSView(context: Context) -> NSView {
+        let view = TrackingNSView()
+        view.onMouseChange = onMouseChange
+        return view
+    }
+    
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if let trackingView = nsView as? TrackingNSView {
+            trackingView.onMouseChange = onMouseChange
+        }
+    }
+}
+
+class TrackingNSView: NSView {
+    var onMouseChange: ((Bool) -> Void)?
+    private var trackingArea: NSTrackingArea?
+    
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        
+        if let trackingArea = trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self,
+            userInfo: nil
+        )
+        
+        addTrackingArea(area)
+        trackingArea = area
+    }
+    
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        onMouseChange?(true)
+    }
+    
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        onMouseChange?(false)
     }
 }

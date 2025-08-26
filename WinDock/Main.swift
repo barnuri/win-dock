@@ -23,7 +23,7 @@ private func setGlobalErrorHandlers() {
 }
 
 @main
-struct WinDockApp: App {
+struct Main: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     init() {

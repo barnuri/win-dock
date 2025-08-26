@@ -160,7 +160,8 @@ struct DockView: View {
     private var dockIconsSection: some View {
         if dockPosition == .bottom || dockPosition == .top {
             HStack(spacing: 2) {
-                ForEach(Array(appManager.dockApps.enumerated()), id: \.element.id) { index, app in
+                ForEach(appManager.dockApps, id: \.id) { app in
+                    let index = appManager.dockApps.firstIndex(where: { $0.id == app.id }) ?? 0
                     HStack(spacing: 0) {
                         // Insertion indicator before the icon
                         Rectangle()
@@ -200,7 +201,8 @@ struct DockView: View {
             }
         } else {
             VStack(spacing: 2) {
-                ForEach(Array(appManager.dockApps.enumerated()), id: \.element.id) { index, app in
+                ForEach(appManager.dockApps, id: \.id) { app in
+                    let index = appManager.dockApps.firstIndex(where: { $0.id == app.id }) ?? 0
                     VStack(spacing: 0) {
                         // Insertion indicator before the icon
                         Rectangle()
