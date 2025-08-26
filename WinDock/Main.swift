@@ -80,6 +80,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             BackgroundUpdateManager.shared.startBackgroundUpdates()
         }
         
+        // Initialize NotificationPositionManager to start background monitoring
+        // This ensures notification positioning works immediately when app launches,
+        // not just when settings page is opened
+        _ = NotificationPositionManager.shared
+        
         // Ensure the app shows up in the dock (counteract LSUIElement if needed)
         ensureAppVisibility()
         
@@ -132,6 +137,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         AppLogger.shared.info("Application will terminate")
         WindowsResizeManager.shared.stop()
+        NotificationPositionManager.shared.stop()
     }
     
     

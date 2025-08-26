@@ -1,3 +1,4 @@
 - fix WindowPreviewView to show window preview when mouse over on app
 - show notification badge on dock app icon if there are notifications in top right corner
 - fix the windows count badge to show correct number of windows
+- detect isWindowlessApp

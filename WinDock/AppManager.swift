@@ -10,13 +10,26 @@ struct DockApp: Identifiable, Hashable {
     let name: String
     let icon: NSImage?
     let url: URL?
-    var isRunning: Bool
     var isPinned: Bool
     var windowCount: Int
     var runningApplication: NSRunningApplication?
     var windows: [WindowInfo] = []
     var notificationCount: Int = 0
     var hasNotifications: Bool = false
+    
+    var isRunning: Bool {
+        return runningApplication != nil
+    }
+    
+    var isMinimized: Bool {
+        guard let runningApp = runningApplication else { return false }
+        // An app is considered minimized if it has windows but none are visible
+        return isRunning && !runningApp.isActive && windows.allSatisfy { $0.isMinimized }
+    }
+    
+    var isHidden: Bool {
+        return runningApplication?.isHidden ?? false
+    }
     
     func hash(into hasher: inout Hasher) {
         hasher.combine(bundleIdentifier)
@@ -162,7 +175,6 @@ class AppManager: ObservableObject {
                 name: app.localizedName ?? bundleId,
                 icon: app.icon,
                 url: app.bundleURL,
-                isRunning: true,
                 isPinned: pinnedBundleIdentifiers.contains(bundleId),
                 windowCount: windowCount,
                 runningApplication: app,
@@ -379,7 +391,6 @@ class AppManager: ObservableObject {
             name: name,
             icon: icon,
             url: appURL,
-            isRunning: false,
             isPinned: true,
             windowCount: 0,
             runningApplication: nil,
@@ -405,144 +416,393 @@ class AppManager: ObservableObject {
         saveDockAppOrder()
     }
     
+    func reorderApp(withBundleId sourceBundleId: String, toPosition targetApp: DockApp) {
+        guard let sourceIndex = dockApps.firstIndex(where: { $0.bundleIdentifier == sourceBundleId }),
+              let targetIndex = dockApps.firstIndex(where: { $0.bundleIdentifier == targetApp.bundleIdentifier }),
+              sourceIndex != targetIndex else { return }
+        
+        moveApp(from: sourceIndex, to: targetIndex)
+        AppLogger.shared.info("Reordered app \(sourceBundleId) to position of \(targetApp.name)")
+    }
+    
     // MARK: - App Actions
 
     func focusWindow(windowID: CGWindowID, app: DockApp) {
-        guard let runningApp = app.runningApplication else { return }
-        
-        // First activate the application
-        if #available(macOS 14.0, *) {
-            runningApp.activate()
-        } else {
-            runningApp.activate(options: [.activateIgnoringOtherApps])
+        guard let runningApp = app.runningApplication else { 
+            AppLogger.shared.warning("Cannot focus window: app is not running")
+            return 
         }
         
-        // If we have a specific window ID, try to focus it using CGWindow API
+        AppLogger.shared.info("Focusing window \(windowID) for app \(app.name)")
+        
+        // First ensure the app is unhidden and activated with all windows
+        if runningApp.isHidden {
+            _ = runningApp.unhide()
+        }
+        
+        // Activate with all windows to ensure proper window management
+        if #available(macOS 14.0, *) {
+            _ = runningApp.activate()
+        } else {
+            _ = runningApp.activate(options: [.activateAllWindows])
+        }
+        
+        // If we have a specific window ID, try multiple approaches to focus it
         if windowID > 0 {
-            // Use Core Graphics to get window information and attempt to bring it to front
+            // Small delay to ensure activation completes
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                // Try to get window information
-                guard let windowList = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]],
-                      let windowInfo = windowList.first else {
-                    AppLogger.shared.warning("Could not find window with ID \(windowID)")
+                self.focusSpecificWindow(windowID: windowID, app: app, runningApp: runningApp)
+            }
+        } else {
+            // No specific window, just ensure app is frontmost
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                self.ensureAppIsFrontmost(app: app, runningApp: runningApp)
+            }
+        }
+    }
+    
+    private func focusSpecificWindow(windowID: CGWindowID, app: DockApp, runningApp: NSRunningApplication) {
+        // Try to get window information
+        guard let windowList = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]],
+              let windowInfo = windowList.first else {
+            AppLogger.shared.warning("Could not find window with ID \(windowID)")
+            self.ensureAppIsFrontmost(app: app, runningApp: runningApp)
+            return
+        }
+        
+        // Verify window belongs to the app
+        guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
+              ownerPID == runningApp.processIdentifier else {
+            AppLogger.shared.warning("Window \(windowID) does not belong to app \(app.name)")
+            self.ensureAppIsFrontmost(app: app, runningApp: runningApp)
+            return
+        }
+        
+        let windowName = windowInfo[kCGWindowName as String] as? String ?? ""
+        let isMinimized = !(windowInfo[kCGWindowIsOnscreen as String] as? Bool ?? true)
+        
+        AppLogger.shared.info("Focusing window '\(windowName)', minimized: \(isMinimized)")
+        
+        // Approach 1: Try direct app-level window management first
+        if !windowName.isEmpty {
+            let appScript = """
+            tell application "\(app.name)"
+                activate
+                try
+                    set index of window "\(windowName)" to 1
+                    if minimized of window "\(windowName)" then
+                        set miniaturized of window "\(windowName)" to false
+                    end if
+                on error errMsg
+                    log "Window focus error: " & errMsg
+                end try
+            end tell
+            """
+            
+            if let appleScript = NSAppleScript(source: appScript) {
+                var error: NSDictionary?
+                appleScript.executeAndReturnError(&error)
+                if error == nil {
+                    AppLogger.shared.info("Successfully focused window using app script")
                     return
                 }
-                
-                // Check if window belongs to the app
-                if let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
-                   ownerPID == runningApp.processIdentifier {
-                    
-                    // Use AppleScript to focus the specific window by title
-                    if let windowName = windowInfo[kCGWindowName as String] as? String, !windowName.isEmpty {
-                        let script = """
-                        tell application "\(app.name)"
-                            activate
-                            try
-                                set index of window "\(windowName)" to 1
-                            on error
-                                -- Fallback: just activate the app
-                                activate
-                            end try
-                        end tell
-                        """
-                        
-                        if let appleScript = NSAppleScript(source: script) {
-                            var error: NSDictionary?
-                            appleScript.executeAndReturnError(&error)
-                            if let error = error {
-                                AppLogger.shared.error("Focus window AppleScript error: \(error)")
-                            }
-                        }
-                    } else {
-                        // Fallback: use System Events to bring window to front
-                        let script = """
-                        tell application "System Events"
-                            tell process "\(app.name)"
-                                set frontmost to true
-                                try
-                                    perform action "AXRaise" of window 1
-                                end try
-                            end tell
-                        end tell
-                        """
-                        
-                        if let appleScript = NSAppleScript(source: script) {
-                            var error: NSDictionary?
-                            appleScript.executeAndReturnError(&error)
-                            if let error = error {
-                                AppLogger.shared.error("Focus window System Events error: \(error)")
-                            }
-                        }
-                    }
-                } else {
-                    AppLogger.shared.warning("Window \(windowID) does not belong to app \(app.name)")
+                AppLogger.shared.warning("App script failed: \(error?.description ?? "unknown")")
+            }
+        }
+        
+        // Approach 2: Use System Events with more robust window handling
+        let processName = runningApp.localizedName ?? app.name
+        let systemScript = """
+        tell application "System Events"
+            try
+                tell process "\(processName)"
+                    set frontmost to true
+                    if "\(windowName)" is not "" then
+                        try
+                            set targetWindow to first window whose title is "\(windowName)"
+                            perform action "AXRaise" of targetWindow
+                            click targetWindow
+                        on error
+                            -- Fallback: try by index if name fails
+                            if (count windows) > 0 then
+                                perform action "AXRaise" of window 1
+                                click window 1
+                            end if
+                        end try
+                    else
+                        -- No window name, just bring first window forward
+                        if (count windows) > 0 then
+                            perform action "AXRaise" of window 1
+                            click window 1
+                        end if
+                    end if
+                end tell
+            on error errMsg
+                log "System Events error: " & errMsg
+            end try
+        end tell
+        """
+        
+        if let systemAppleScript = NSAppleScript(source: systemScript) {
+            var error: NSDictionary?
+            systemAppleScript.executeAndReturnError(&error)
+            if let error = error {
+                AppLogger.shared.error("System Events script failed: \(error)")
+            } else {
+                AppLogger.shared.info("Window focused using System Events")
+            }
+        }
+    }
+    
+    private func ensureAppIsFrontmost(app: DockApp, runningApp: NSRunningApplication) {
+        let script = """
+        tell application "\(app.name)"
+            activate
+        end tell
+        tell application "System Events"
+            tell process "\(runningApp.localizedName ?? app.name)"
+                set frontmost to true
+            end tell
+        end tell
+        """
+        
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+            if let error = error {
+                AppLogger.shared.warning("Ensure frontmost script failed: \(error)")
+            }
+        }
+    }
+    
+    func closeWindow(windowID: CGWindowID, windowTitle: String, app: DockApp) -> Bool {
+        guard let runningApp = app.runningApplication else {
+            AppLogger.shared.warning("Cannot close window: app is not running")
+            return false
+        }
+        
+        AppLogger.shared.info("Closing window '\(windowTitle)' (ID: \(windowID)) for app \(app.name)")
+        
+        // Verify the window belongs to this app
+        if windowID > 0 {
+            guard let windowList = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]],
+                  let windowInfo = windowList.first,
+                  let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
+                  ownerPID == runningApp.processIdentifier else {
+                AppLogger.shared.warning("Window \(windowID) does not belong to app \(app.name)")
+                return false
+            }
+        }
+        
+        // Try multiple approaches for closing the window
+        let processName = runningApp.localizedName ?? app.name
+        var success = false
+        
+        // Approach 1: Direct app-level close command
+        if !windowTitle.isEmpty {
+            let appScript = """
+            tell application "\(app.name)"
+                try
+                    close window "\(windowTitle)"
+                    return true
+                on error
+                    return false
+                end try
+            end tell
+            """
+            
+            if let appleScript = NSAppleScript(source: appScript) {
+                var error: NSDictionary?
+                let result = appleScript.executeAndReturnError(&error)
+                if error == nil, result.booleanValue {
+                    AppLogger.shared.info("Successfully closed window using app script")
+                    return true
                 }
             }
         }
+        
+        // Approach 2: System Events with accessibility actions
+        let systemScript = """
+        tell application "System Events"
+            try
+                tell process "\(processName)"
+                    if "\(windowTitle)" is not "" then
+                        try
+                            set targetWindow to first window whose title is "\(windowTitle)"
+                            click (first button of targetWindow whose subrole is "AXCloseButton")
+                            return true
+                        on error
+                            -- Try alternative close methods
+                            try
+                                close window "\(windowTitle)"
+                                return true
+                            end try
+                        end try
+                    else
+                        -- No window title, try to close first window
+                        if (count windows) > 0 then
+                            try
+                                click (first button of window 1 whose subrole is "AXCloseButton")
+                                return true
+                            on error
+                                try
+                                    close window 1
+                                    return true
+                                end try
+                            end try
+                        end if
+                    end if
+                end tell
+            end try
+            return false
+        end tell
+        """
+        
+        if let systemAppleScript = NSAppleScript(source: systemScript) {
+            var error: NSDictionary?
+            let result = systemAppleScript.executeAndReturnError(&error)
+            if error == nil, result.booleanValue {
+                AppLogger.shared.info("Successfully closed window using System Events")
+                success = true
+            } else {
+                AppLogger.shared.warning("System Events close failed: \(error?.description ?? "unknown")")
+            }
+        }
+        
+        // Approach 3: Fallback using keyboard shortcut (Cmd+W)
+        if !success {
+            let keyboardScript = """
+            tell application "System Events"
+                try
+                    tell process "\(processName)"
+                        set frontmost to true
+                        if "\(windowTitle)" is not "" then
+                            try
+                                set targetWindow to first window whose title is "\(windowTitle)"
+                                click targetWindow
+                                delay 0.1
+                            end try
+                        end if
+                        keystroke "w" using command down
+                        return true
+                    end tell
+                on error
+                    return false
+                end try
+            end tell
+            """
+            
+            if let keyboardAppleScript = NSAppleScript(source: keyboardScript) {
+                var error: NSDictionary?
+                let result = keyboardAppleScript.executeAndReturnError(&error)
+                if error == nil, result.booleanValue {
+                    AppLogger.shared.info("Successfully closed window using keyboard shortcut")
+                    success = true
+                } else {
+                    AppLogger.shared.warning("Keyboard shortcut close failed: \(error?.description ?? "unknown")")
+                }
+            }
+        }
+        
+        if !success {
+            AppLogger.shared.error("All window close attempts failed for window '\(windowTitle)'")
+        }
+        
+        return success
     }
 
     func activateApp(_ app: DockApp) {
         AppLogger.shared.info("activateApp called for \(app.name), isRunning: \(app.isRunning), isActive: \(app.runningApplication?.isActive ?? false)")
+        
         if let runningApp = app.runningApplication {
-            // Force app to front and activate
             AppLogger.shared.info("Activating running app: \(app.name)")
             
-            // Ensure the app is unhidden if it was hidden
+            // Ensure the app is unhidden first
             if runningApp.isHidden {
-                runningApp.unhide()
+                let unhideSuccess = runningApp.unhide()
+                AppLogger.shared.info("Unhide app result: \(unhideSuccess)")
             }
             
-            // Activate with all available options to ensure it comes to front
+            // Activate with enhanced options for better reliability
+            var activateSuccess = false
             if #available(macOS 14.0, *) {
-                runningApp.activate()
+                activateSuccess = runningApp.activate()
             } else {
-                runningApp.activate(options: [.activateIgnoringOtherApps, .activateAllWindows])
+                // Use ActivateAllWindows instead of deprecated ActivateIgnoringOtherApps
+                activateSuccess = runningApp.activate(options: [.activateAllWindows])
             }
             
-            // Use AppleScript to ensure the app is brought to the very front
-            let bringToFrontScript = """
-            tell application "\(app.name)"
-                activate
-            end tell
-            tell application "System Events"
-                tell process "\(app.name)"
-                    set frontmost to true
-                    try
-                        perform action "AXRaise" of window 1
-                    end try
-                end tell
-            end tell
-            """
+            AppLogger.shared.info("Activate app result: \(activateSuccess)")
             
+            // Additional step: Use AppleScript for more reliable activation
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                if let appleScript = NSAppleScript(source: bringToFrontScript) {
+                let enhancedActivationScript = """
+                tell application "\(app.name)"
+                    activate
+                end tell
+                tell application "System Events"
+                    tell process "\(runningApp.localizedName ?? app.name)"
+                        set frontmost to true
+                        -- Bring all windows to front if any exist
+                        if (count windows) > 0 then
+                            try
+                                perform action "AXRaise" of window 1
+                            end try
+                        end if
+                    end tell
+                end tell
+                """
+                
+                if let appleScript = NSAppleScript(source: enhancedActivationScript) {
                     var error: NSDictionary?
                     appleScript.executeAndReturnError(&error)
                     if let error = error {
-                        AppLogger.shared.error("Bring to front AppleScript error: \(error)")
+                        AppLogger.shared.warning("Enhanced activation script failed: \(error)")
+                    } else {
+                        AppLogger.shared.info("Enhanced activation completed successfully")
                     }
-                }
-                
-                // Additional activation attempt
-                if #available(macOS 14.0, *) {
-                    runningApp.activate()
-                } else {
-                    runningApp.activate(options: [.activateIgnoringOtherApps])
                 }
             }
         } else if let appURL = app.url {
+            // Only launch if we have a valid URL and the app exists at that location
+            guard FileManager.default.fileExists(atPath: appURL.path) else {
+                AppLogger.shared.error("App not found at URL: \(appURL.path)")
+                return
+            }
+            
             AppLogger.shared.info("Launching app from URL: \(appURL.path)")
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.activates = true
-            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
+            configuration.promptsUserIfNeeded = false  // Prevent user prompts/popups
+            
+            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { (app, error) in
+                if let error = error {
+                    AppLogger.shared.error("Failed to launch app from URL: \(error.localizedDescription)")
+                }
+            }
         } else {
-            if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier) {
-                AppLogger.shared.info("Launching app from bundle identifier: \(app.bundleIdentifier)")
-                let configuration = NSWorkspace.OpenConfiguration()
-                configuration.activates = true
-                NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
-            } else {
-                AppLogger.shared.error("Could not find app to activate: \(app.bundleIdentifier)")
+            // For apps without a stored URL, only attempt to launch if they're pinned and we can find them silently
+            guard app.isPinned else {
+                AppLogger.shared.warning("App not running and not pinned, skipping launch: \(app.bundleIdentifier)")
+                return
+            }
+            
+            // Try to find the app silently without triggering system dialogs
+            guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier),
+                  FileManager.default.fileExists(atPath: appURL.path) else {
+                AppLogger.shared.error("Could not find application silently: \(app.bundleIdentifier)")
+                return
+            }
+            
+            AppLogger.shared.info("Launching pinned app from bundle identifier: \(appURL.path)")
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            configuration.promptsUserIfNeeded = false  // Prevent user prompts/popups
+            
+            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { (app, error) in
+                if let error = error {
+                    AppLogger.shared.error("Failed to launch app from bundle identifier: \(error.localizedDescription)")
+                }
             }
         }
     }

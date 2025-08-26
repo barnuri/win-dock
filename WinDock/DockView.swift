@@ -176,7 +176,7 @@ struct DockView: View {
                             appManager: appManager
                         )
                     }
-                    .onDrop(of: ["public.plain-text"], delegate: DockDropDelegate(
+                    .onDrop(of: ["public.plain-text", "com.windock.app-item"], delegate: DockDropDelegate(
                         insertionIndex: index,
                         appManager: appManager,
                         onDragOver: { isOver in
@@ -191,7 +191,7 @@ struct DockView: View {
                     .frame(width: 3, height: 40)
                     .opacity(dragOverIndex == appManager.dockApps.count ? 0.8 : 0.0)
                     .animation(.easeInOut(duration: 0.15), value: dragOverIndex)
-                    .onDrop(of: ["public.plain-text"], delegate: DockDropDelegate(
+                    .onDrop(of: ["public.plain-text", "com.windock.app-item"], delegate: DockDropDelegate(
                         insertionIndex: appManager.dockApps.count,
                         appManager: appManager,
                         onDragOver: { isOver in
@@ -217,7 +217,7 @@ struct DockView: View {
                             appManager: appManager
                         )
                     }
-                    .onDrop(of: ["public.plain-text"], delegate: DockDropDelegate(
+                    .onDrop(of: ["public.plain-text", "com.windock.app-item"], delegate: DockDropDelegate(
                         insertionIndex: index,
                         appManager: appManager,
                         onDragOver: { isOver in
@@ -232,7 +232,7 @@ struct DockView: View {
                     .frame(width: 40, height: 3)
                     .opacity(dragOverIndex == appManager.dockApps.count ? 0.8 : 0.0)
                     .animation(.easeInOut(duration: 0.15), value: dragOverIndex)
-                    .onDrop(of: ["public.plain-text"], delegate: DockDropDelegate(
+                    .onDrop(of: ["public.plain-text", "com.windock.app-item"], delegate: DockDropDelegate(
                         insertionIndex: appManager.dockApps.count,
                         appManager: appManager,
                         onDragOver: { isOver in
@@ -251,8 +251,8 @@ struct DockDropDelegate: DropDelegate {
     let onDragOver: (Bool) -> Void
     
     func validateDrop(info: DropInfo) -> Bool {
-        // Check if the drop info contains plain text items
-        let hasCompatibleItem = info.hasItemsConforming(to: ["public.plain-text"])
+        // Check if the drop info contains compatible items
+        let hasCompatibleItem = info.hasItemsConforming(to: ["public.plain-text", "com.windock.app-item"])
         AppLogger.shared.info("Validating drop - has compatible item: \(hasCompatibleItem)")
         return hasCompatibleItem
     }
@@ -271,54 +271,80 @@ struct DockDropDelegate: DropDelegate {
         // Notify that drag has ended
         NotificationCenter.default.post(name: NSNotification.Name("DragEnded"), object: nil)
         
-        let providers = info.itemProviders(for: ["public.plain-text"])
+        // Try custom app-item type first for more reliable data
+        let providers = info.itemProviders(for: ["com.windock.app-item", "public.plain-text"])
         guard let provider = providers.first else { 
             AppLogger.shared.error("No item provider found")
             return false 
         }
         
-        AppLogger.shared.info("Loading item with public.plain-text type")
-        
-        provider.loadDataRepresentation(forTypeIdentifier: "public.plain-text") { (data, error) in
-            if let error = error {
-                AppLogger.shared.error("Error loading data: \(error)")
-                return
+        // Handle custom app-item type first
+        if provider.hasItemConformingToTypeIdentifier("com.windock.app-item") {
+            AppLogger.shared.info("Loading item with com.windock.app-item type")
+            
+            provider.loadDataRepresentation(forTypeIdentifier: "com.windock.app-item") { (data, error) in
+                if let error = error {
+                    AppLogger.shared.error("Error loading app-item data: \(error)")
+                    return
+                }
+                
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+                      let bundleIdentifier = json["bundleIdentifier"] else {
+                    AppLogger.shared.error("Could not extract bundle identifier from app-item data")
+                    return
+                }
+                
+                AppLogger.shared.info("Processing drop for bundle identifier from app-item: \(bundleIdentifier)")
+                self.processDrop(bundleIdentifier: bundleIdentifier)
             }
+        } else if provider.hasItemConformingToTypeIdentifier("public.plain-text") {
+            AppLogger.shared.info("Loading item with public.plain-text type")
             
-            guard let data = data,
-                  let bundleIdentifier = String(data: data, encoding: .utf8) else {
-                AppLogger.shared.error("Could not extract bundle identifier from data")
-                return
-            }
-            
-            AppLogger.shared.info("Processing drop for bundle identifier: \(bundleIdentifier)")
-            
-            DispatchQueue.main.async {
-                let currentApps = appManager.dockApps
-                guard let draggedApp = currentApps.first(where: { $0.bundleIdentifier == bundleIdentifier }) else {
-                    AppLogger.shared.error("Could not find dragged app with bundle identifier: \(bundleIdentifier)")
-                    AppLogger.shared.info("Available apps: \(currentApps.map { $0.bundleIdentifier })")
+            provider.loadDataRepresentation(forTypeIdentifier: "public.plain-text") { (data, error) in
+                if let error = error {
+                    AppLogger.shared.error("Error loading plain-text data: \(error)")
                     return
                 }
                 
-                guard let fromIndex = currentApps.firstIndex(of: draggedApp) else {
-                    AppLogger.shared.error("Could not find index of dragged app")
+                guard let data = data,
+                      let bundleIdentifier = String(data: data, encoding: .utf8) else {
+                    AppLogger.shared.error("Could not extract bundle identifier from plain-text data")
                     return
                 }
                 
-                guard fromIndex != insertionIndex else {
-                    AppLogger.shared.info("Drop at same position, ignoring")
-                    return
-                }
-                
-                AppLogger.shared.info("Moving app from index \(fromIndex) to insertion index \(insertionIndex)")
-                
-                // Calculate the correct insertion index
-                let toIndex = fromIndex < insertionIndex ? insertionIndex - 1 : insertionIndex
-                appManager.moveApp(from: fromIndex, to: toIndex)
+                AppLogger.shared.info("Processing drop for bundle identifier from plain-text: \(bundleIdentifier)")
+                self.processDrop(bundleIdentifier: bundleIdentifier)
             }
         }
         
         return true
+    }
+    
+    private func processDrop(bundleIdentifier: String) {
+        DispatchQueue.main.async {
+            let currentApps = self.appManager.dockApps
+            guard let draggedApp = currentApps.first(where: { $0.bundleIdentifier == bundleIdentifier }) else {
+                AppLogger.shared.error("Could not find dragged app with bundle identifier: \(bundleIdentifier)")
+                AppLogger.shared.info("Available apps: \(currentApps.map { $0.bundleIdentifier })")
+                return
+            }
+            
+            guard let fromIndex = currentApps.firstIndex(of: draggedApp) else {
+                AppLogger.shared.error("Could not find index of dragged app")
+                return
+            }
+            
+            guard fromIndex != self.insertionIndex else {
+                AppLogger.shared.info("Drop at same position, ignoring")
+                return
+            }
+            
+            AppLogger.shared.info("Moving app from index \(fromIndex) to insertion index \(self.insertionIndex)")
+            
+            // Calculate the correct insertion index
+            let toIndex = fromIndex < self.insertionIndex ? self.insertionIndex - 1 : self.insertionIndex
+            self.appManager.moveApp(from: fromIndex, to: toIndex)
+        }
     }
 }

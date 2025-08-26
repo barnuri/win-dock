@@ -47,6 +47,7 @@ class NotificationPositionManager: NSObject, ObservableObject {
     override init() {
         super.init()
         loadSettings()
+        debugLog("NotificationPositionManager initialized - enabled: \(isEnabled), position: \(currentPosition.displayName)")
         if isEnabled {
             setupObserver()
         }
@@ -143,6 +144,11 @@ class NotificationPositionManager: NSObject, ObservableObject {
         cachedInitialNotifSize = nil
         cachedInitialPadding = nil
         debugLog("Observer stopped and caches cleared")
+    }
+    
+    public func stop() {
+        stopObserver()
+        debugLog("NotificationPositionManager stopped")
     }
     
     func checkAccessibilityPermissions() -> Bool {

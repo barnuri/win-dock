@@ -1,6 +1,31 @@
 import SwiftUI
 import AppKit
 
+typealias CGSConnectionID = UInt32
+
+struct CGSWindowCaptureOptions: OptionSet {
+    let rawValue: UInt32
+    static let ignoreGlobalClipShape = CGSWindowCaptureOptions(rawValue: 1 << 11)
+    static let bestResolution = CGSWindowCaptureOptions(rawValue: 1 << 8)
+    static let fullSize = CGSWindowCaptureOptions(rawValue: 1 << 19)
+}
+
+@_silgen_name("CGSMainConnectionID")
+func CGSMainConnectionID() -> CGSConnectionID
+
+@_silgen_name("CGSHWCaptureWindowList")
+func CGSHWCaptureWindowList(_ cid: CGSConnectionID, _ windowList: inout CGWindowID, _ windowCount: UInt32, _ options: CGSWindowCaptureOptions) -> Unmanaged<CFArray>
+
+let CGS_CONNECTION = CGSMainConnectionID()
+
+extension CGWindowID {
+    func screenshot() -> CGImage? {
+        var windowId = self
+        let list = CGSHWCaptureWindowList(CGS_CONNECTION, &windowId, 1, [.ignoreGlobalClipShape, .bestResolution, .fullSize]).takeRetainedValue() as! [CGImage]
+        return list.first
+    }
+}
+
 struct WindowPreviewView: View {
     let app: DockApp
     let appManager: AppManager
@@ -65,21 +90,37 @@ struct WindowPreviewView: View {
                 .padding()
             } else {
                 // Horizontal scrolling layout for multiple windows
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(windowPreviews, id: \.windowID) { preview in
+                let displayedWindows = Array(windowPreviews.prefix(5))
+                let itemWidth: CGFloat = 220
+                let spacing: CGFloat = 12
+                let padding: CGFloat = 32 // 16 padding on each side
+                let maxWindowsToShowWithoutScroll = 5
+                
+                let shouldShowScroll = windowPreviews.count > maxWindowsToShowWithoutScroll
+                let windowsToCalculateWidth = min(displayedWindows.count, maxWindowsToShowWithoutScroll)
+                let calculatedWidth = CGFloat(windowsToCalculateWidth) * itemWidth + CGFloat(max(0, windowsToCalculateWidth - 1)) * spacing + padding
+                
+                ScrollView(.horizontal, showsIndicators: shouldShowScroll) {
+                    HStack(spacing: spacing) {
+                        ForEach(displayedWindows, id: \.windowID) { preview in
                             WindowsPreviewItem(
                                 preview: preview,
                                 app: app,
                                 appManager: appManager,
-                                hasMultipleWindows: windowPreviews.count > 1
+                                hasMultipleWindows: windowPreviews.count > 1,
+                                onWindowClosed: loadWindowPreviews
                             )
+                        }
+                        
+                        // Show "more windows" indicator if there are more than 5 windows
+                        if windowPreviews.count > 5 {
+                            MoreWindowsIndicator(remainingCount: windowPreviews.count - 5)
                         }
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                 }
-                .frame(maxWidth: min(CGFloat(windowPreviews.count) * 200 + CGFloat(windowPreviews.count - 1) * 12 + 32, 800))
+                .frame(width: calculatedWidth)
             }
         }
         .background(Color(NSColor.windowBackgroundColor))
@@ -112,7 +153,8 @@ struct WindowPreviewView: View {
                 let image = createEnhancedPreview(for: window, index: index)
                 
                 if let image = image {
-                    let windowTitle = window.title.isEmpty ? "Window \(index + 1)" : window.title
+                    let windowTitle = !window.title.isEmpty && window.title != app.name ? 
+                        window.title : "\(app.name) - Window \(index + 1)"
                     let preview = WindowPreview(
                         windowID: window.windowID,
                         title: windowTitle,
@@ -125,13 +167,12 @@ struct WindowPreviewView: View {
             }
         }
         
-        // If no windows from app.windows but app is running, try to get windows via system APIs
+        // If no windows from app.windows but app is running, try system APIs (like alt-tab-macos)
         if previews.isEmpty && app.isRunning {
             if let runningApp = app.runningApplication {
-                // Get windows using NSRunningApplication
                 let windowList = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
                 
-                for (index, windowInfo) in windowList.enumerated() {
+                for (_, windowInfo) in windowList.enumerated() {
                     guard let windowPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
                           windowPID == runningApp.processIdentifier,
                           let windowNumber = windowInfo[kCGWindowNumber as String] as? CGWindowID,
@@ -143,16 +184,18 @@ struct WindowPreviewView: View {
                         continue
                     }
                     
-                    // Skip very small windows (likely system windows)
+                    // Skip very small windows (likely system windows, like alt-tab-macos)
                     if width < 100 || height < 50 {
                         continue
                     }
                     
-                    let windowTitle = windowInfo[kCGWindowName as String] as? String ?? "Window \(index + 1)"
+                    let windowTitle = windowInfo[kCGWindowName as String] as? String ?? ""
+                    let finalTitle = !windowTitle.isEmpty && windowTitle != app.name ? 
+                        windowTitle : "\(app.name) - Window \(previews.count + 1)"
                     let bounds = CGRect(x: x, y: y, width: width, height: height)
                     
                     let windowInfoStruct = WindowInfo(
-                        title: windowTitle,
+                        title: finalTitle,
                         windowID: windowNumber,
                         bounds: bounds,
                         isMinimized: false,
@@ -164,7 +207,7 @@ struct WindowPreviewView: View {
                     if let image = image {
                         let preview = WindowPreview(
                             windowID: windowNumber,
-                            title: windowTitle,
+                            title: finalTitle,
                             image: image,
                             bounds: bounds,
                             isMinimized: false
@@ -182,7 +225,7 @@ struct WindowPreviewView: View {
         
         // If still no window previews but app is running, create a single app preview
         if previews.isEmpty && app.isRunning {
-            if let image = createEnhancedPreview(for: nil, index: 0) {
+            if let image = createAppIconPreview() {
                 let preview = WindowPreview(
                     windowID: 0,
                     title: app.name,
@@ -212,7 +255,17 @@ struct WindowPreviewView: View {
     }
     
     private func createEnhancedPreview(for window: WindowInfo?, index: Int) -> NSImage? {
-        let image = NSImage(size: NSSize(width: 180, height: 120))
+        // Try to get actual screenshot first (like alt-tab-macos)
+        if let window = window, let screenshot = window.windowID.screenshot() {
+            return NSImage(cgImage: screenshot, size: CGSize(width: 220, height: 140))
+        }
+        
+        // Fallback to app icon preview if screenshot fails
+        return createAppIconPreview()
+    }
+    
+    private func createAppIconPreview() -> NSImage? {
+        let image = NSImage(size: NSSize(width: 220, height: 140))
         image.lockFocus()
         
         // Windows 11-style background with subtle gradient
@@ -230,18 +283,18 @@ struct WindowPreviewView: View {
         
         // Draw app icon with modern shadow
         if let appIcon = app.icon {
-            let iconSize = NSSize(width: 32, height: 32)
+            let iconSize = NSSize(width: 48, height: 48)
             let iconRect = NSRect(
                 x: (image.size.width - iconSize.width) / 2,
-                y: (image.size.height - iconSize.height) / 2 + 12,
+                y: (image.size.height - iconSize.height) / 2 + 15,
                 width: iconSize.width,
                 height: iconSize.height
             )
             
             let shadow = NSShadow()
-            shadow.shadowColor = NSColor.black.withAlphaComponent(0.2)
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.3)
             shadow.shadowOffset = NSSize(width: 0, height: -2)
-            shadow.shadowBlurRadius = 6
+            shadow.shadowBlurRadius = 8
             shadow.set()
             
             appIcon.draw(in: iconRect)
@@ -252,46 +305,28 @@ struct WindowPreviewView: View {
         noShadow.shadowColor = NSColor.clear
         noShadow.set()
         
-        // Window title
-        let title = window?.title ?? app.name
+        // App name
         let titleAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
             .foregroundColor: NSColor.labelColor
         ]
-        let attributedTitle = NSAttributedString(string: title, attributes: titleAttributes)
+        let attributedTitle = NSAttributedString(string: app.name, attributes: titleAttributes)
         let titleSize = attributedTitle.size()
+        let maxTitleWidth = image.size.width - 20
         let titleRect = NSRect(
-            x: (image.size.width - titleSize.width) / 2,
+            x: max(10, (image.size.width - min(titleSize.width, maxTitleWidth)) / 2),
             y: 20,
-            width: titleSize.width,
+            width: min(titleSize.width, maxTitleWidth),
             height: titleSize.height
         )
         attributedTitle.draw(in: titleRect)
-        
-        // Window status
-        if let window = window {
-            let status = window.isMinimized ? "Minimized" : "Active"
-            let statusAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 9),
-                .foregroundColor: window.isMinimized ? NSColor.systemOrange : NSColor.systemGreen
-            ]
-            let attributedStatus = NSAttributedString(string: status, attributes: statusAttributes)
-            let statusSize = attributedStatus.size()
-            let statusRect = NSRect(
-                x: (image.size.width - statusSize.width) / 2,
-                y: 8,
-                width: statusSize.width,
-                height: statusSize.height
-            )
-            attributedStatus.draw(in: statusRect)
-        }
         
         image.unlockFocus()
         return image
     }
     
     private func createLaunchPreview() -> NSImage? {
-        let image = NSImage(size: NSSize(width: 180, height: 120))
+        let image = NSImage(size: NSSize(width: 220, height: 140))
         image.lockFocus()
         
         // Launch-themed background
@@ -353,11 +388,50 @@ struct WindowPreviewView: View {
     }
 }
 
+struct MoreWindowsIndicator: View {
+    let remainingCount: Int
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(NSColor.controlBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+                    )
+                
+                VStack(spacing: 8) {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundColor(.secondary)
+                    
+                    Text("+\(remainingCount)")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.secondary)
+                    
+                    Text("more")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .frame(width: 220, height: 140)
+            
+            Text("More windows")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(maxWidth: 220)
+        }
+        .padding(4)
+    }
+}
+
 struct WindowsPreviewItem: View {
     let preview: WindowPreview
     let app: DockApp
     let appManager: AppManager
     let hasMultipleWindows: Bool
+    let onWindowClosed: () -> Void
     @State private var isHovered = false
     @Environment(\.dismiss) private var dismiss
     
@@ -374,9 +448,10 @@ struct WindowsPreviewItem: View {
                 
                 Image(nsImage: preview.image)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 180, height: 120)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 220, height: 140)
                     .cornerRadius(6)
+                    .clipped()
                     .brightness(hasMultipleWindows ? 0.1 : 0.0) // Double-brighten for multiple windows
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
@@ -420,7 +495,7 @@ struct WindowsPreviewItem: View {
                 }
                 .padding(6)
             }
-            .frame(width: 180, height: 120)
+            .frame(width: 220, height: 140)
             .background(
                 RoundedRectangle(cornerRadius: 8)
                     .fill(isHovered ? Color.blue.opacity(0.1) : Color.clear)
@@ -430,22 +505,23 @@ struct WindowsPreviewItem: View {
                 isHovered = hovering
             }
             .onTapGesture {
-                focusWindow()
+                onTap()
                 dismiss()
             }
             
             // Window title
             Text(preview.title)
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 180)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .frame(maxWidth: 220)
+                .multilineTextAlignment(.center)
         }
         .padding(4)
     }
     
-    private func focusWindow() {
+    private func onTap() {
         if preview.windowID > 0 {
             appManager.focusWindow(windowID: preview.windowID, app: app)
             return
@@ -454,36 +530,14 @@ struct WindowsPreviewItem: View {
     }
     
     private func closeWindow() {
-        // Get the proper process name for System Events
-        let processName = app.runningApplication?.localizedName ?? app.name
+        let success = appManager.closeWindow(
+            windowID: preview.windowID,
+            windowTitle: preview.title,
+            app: app
+        )
         
-        let script = """
-        tell application "System Events"
-            try
-                tell process "\(processName)"
-                    try
-                        close window "\(preview.title)"
-                    end try
-                end tell
-            on error
-                -- Fallback: try with the display name
-                try
-                    tell process "\(app.name)"
-                        try
-                            close window "\(preview.title)"
-                        end try
-                    end tell
-                end try
-            end try
-        end tell
-        """
-        
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-            if let error = error {
-                AppLogger.shared.warning("Close window AppleScript error: \(error)")
-            }
+        if success {
+            onWindowClosed()
         }
     }
 }
@@ -495,7 +549,6 @@ struct WindowsPreviewItem: View {
             name: "Safari",
             icon: NSWorkspace.shared.icon(forFile: "/Applications/Safari.app"),
             url: nil,
-            isRunning: true,
             isPinned: true,
             windowCount: 3,
             runningApplication: nil,

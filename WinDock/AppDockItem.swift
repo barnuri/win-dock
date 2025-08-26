@@ -10,6 +10,7 @@ struct AppDockItem: View {
     @State private var isHovering = false
     @State private var isDragging = false
     @State private var showWindowPreview = false
+    @State private var hidePreviewTask: DispatchWorkItem?
 
     // Computed properties for cleaner state management
     private var isActiveApp: Bool { 
@@ -48,6 +49,11 @@ struct AppDockItem: View {
         )
         .popover(isPresented: $showWindowPreview, arrowEdge: .top) {
             WindowPreviewView(app: app, appManager: appManager)
+                .background(
+                    MouseTrackingView { isInside in
+                        handlePreviewMouseTracking(isInside)
+                    }
+                )
         }
         .onTapGesture(perform: handleTap)
         .contextMenu {
@@ -60,7 +66,9 @@ struct AppDockItem: View {
                 }
             }
         )
-        .onDrag(createDragProvider)
+        .onDrag {
+            createDragProvider()
+        }
         .animation(.easeOut(duration: 0.15), value: isDragging)
         .animation(.easeOut(duration: 0.1), value: isHovering)
         .help(toolTip)
@@ -205,11 +213,44 @@ struct AppDockItem: View {
     
     private func handleMouseTracking(_ isInside: Bool) {
         isHovering = isInside
-        showWindowPreview = isInside
+        
+        // Cancel any pending hide task
+        hidePreviewTask?.cancel()
+        hidePreviewTask = nil
+        
+        if isInside {
+            showWindowPreview = true
+        } else {
+            // Create a new hide task with delay
+            let task = DispatchWorkItem {
+                if !self.isHovering {
+                    self.showWindowPreview = false
+                }
+            }
+            hidePreviewTask = task
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: task)
+        }
+    }
+    
+    private func handlePreviewMouseTracking(_ isInside: Bool) {
+        // Cancel any pending hide task when entering preview
+        if isInside {
+            hidePreviewTask?.cancel()
+            hidePreviewTask = nil
+        } else {
+            // Create a new hide task with delay when leaving preview
+            let task = DispatchWorkItem {
+                if !self.isHovering {
+                    self.showWindowPreview = false
+                }
+            }
+            hidePreviewTask = task
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: task)
+        }
     }
     
     private func handleTap() {
-        if app.runningApplication == nil {
+        if !app.isRunning {
             AppLogger.shared.info("AppDockItem handleTap for \(app.name), runningApplication is nil")
             appManager.activateApp(app)
             return
@@ -219,40 +260,60 @@ struct AppDockItem: View {
             showWindowPreview = true
             return
         }
-        if app.runningApplication?.isActive == true {
-            AppLogger.shared.info("AppDockItem handleTap for \(app.name), isActiveApp is true")
-            appManager.hideApp(app)
+        if app.isHidden || app.isMinimized {
+            AppLogger.shared.info("AppDockItem handleTap for \(app.name), isHidden or isMinimized")
+            appManager.activateApp(app)
             return
         }
-        AppLogger.shared.info("AppDockItem handleTap for \(app.name), isActiveApp is false")
-        appManager.activateApp(app)
+        AppLogger.shared.info("AppDockItem handleTap for \(app.name), isRunning is true and not Hidden Or Minimized")
+        appManager.hideApp(app)
     }
     
     private func createDragProvider() -> NSItemProvider {
         isDragging = true
         
-        let dragEndObserver = NotificationCenter.default.addObserver(
+        let itemProvider = NSItemProvider()
+        
+        // Register the app's bundle identifier as drag data
+        itemProvider.registerDataRepresentation(
+            forTypeIdentifier: "public.plain-text", 
+            visibility: .all
+        ) { completion in
+            let data = self.app.bundleIdentifier.data(using: .utf8) ?? Data()
+            completion(data, nil)
+            return nil
+        }
+        
+        // Register app info as a custom type for better drag handling
+        itemProvider.registerDataRepresentation(
+            forTypeIdentifier: "com.windock.app-item",
+            visibility: .all
+        ) { completion in
+            let appInfo = [
+                "bundleIdentifier": self.app.bundleIdentifier,
+                "name": self.app.name,
+                "url": self.app.url?.absoluteString ?? ""
+            ]
+            
+            do {
+                let data = try JSONSerialization.data(withJSONObject: appInfo)
+                completion(data, nil)
+            } catch {
+                completion(nil, error)
+            }
+            return nil
+        }
+        
+        // Listen for drag end notification to reset state
+        NotificationCenter.default.addObserver(
             forName: NSNotification.Name("DragEnded"),
             object: nil,
             queue: .main
         ) { _ in
-            isDragging = false
+            self.isDragging = false
+            NotificationCenter.default.removeObserver(self, name: NSNotification.Name("DragEnded"), object: nil)
         }
         
-        // Fallback cleanup
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-            NotificationCenter.default.removeObserver(dragEndObserver)
-            if isDragging {
-                isDragging = false
-            }
-        }
-        
-        let itemProvider = NSItemProvider()
-        itemProvider.registerDataRepresentation(forTypeIdentifier: "public.plain-text", visibility: .all) { completion in
-            let data = app.bundleIdentifier.data(using: .utf8) ?? Data()
-            completion(data, nil)
-            return nil
-        }
         return itemProvider
     }
 }
