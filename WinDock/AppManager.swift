@@ -11,12 +11,23 @@ struct DockApp: Identifiable, Hashable {
     let icon: NSImage?
     let url: URL?
     var isPinned: Bool
-    var windowCount: Int
     var runningApplication: NSRunningApplication?
     var windows: [WindowInfo] = []
     var notificationCount: Int = 0
     var hasNotifications: Bool = false
-    
+
+    var windowCount: Int {
+        return windows.count
+    }
+
+    var isActive: Bool {
+        return runningApplication?.isActive == true
+    }
+
+    var hasWindows: Bool { 
+        return windows.count > 0
+    }
+
     var isRunning: Bool {
         return runningApplication != nil
     }
@@ -165,9 +176,8 @@ class AppManager: ObservableObject {
 
             processedBundleIds.insert(bundleId)
             
-            // Performance: Only get windows for running apps, minimize expensive calls
-            let windows = app.isActive ? getWindowsForApp(app) : []
-            let windowCount = windows.count
+            // Get windows for all running apps to properly show indicators
+            let windows = getWindowsForApp(app)
             let (hasNotifications, notificationCount) = getNotificationInfo(for: app)
 
             let dockApp = DockApp(
@@ -176,7 +186,6 @@ class AppManager: ObservableObject {
                 icon: app.icon,
                 url: app.bundleURL,
                 isPinned: pinnedBundleIdentifiers.contains(bundleId),
-                windowCount: windowCount,
                 runningApplication: app,
                 windows: windows,
                 notificationCount: notificationCount,
@@ -252,6 +261,11 @@ class AppManager: ObservableObject {
             let alpha = windowInfo[kCGWindowAlpha as String] as? CGFloat ?? 1.0
             let layer = windowInfo[kCGWindowLayer as String] as? Int ?? 0
             
+            // Pre-filter obviously windowless entries before detailed checking
+            guard windowID > 0,
+                  bounds.width > 0 && bounds.height > 0,
+                  alpha >= 0 else { continue }
+            
             // Filter out system windows, splash screens, and other non-user windows
             if shouldIncludeWindow(
                 bounds: bounds,
@@ -276,7 +290,7 @@ class AppManager: ObservableObject {
                 windows.append(window)
             }
         }
-        
+               
         return windows
     }
     
@@ -303,21 +317,40 @@ class AppManager: ObservableObject {
             return false
         }
         
-        // Skip certain window types that are commonly not user-visible
+        // Skip completely transparent windows (likely windowless)
+        if alpha <= 0 {
+            return false
+        }
+        
+        // Skip windows with no meaningful bounds (windowless entries)
+        if bounds.width <= 0 || bounds.height <= 0 {
+            return false
+        }
+        
+        // Skip windows that are clearly utility/background windows
         let excludedTitles = [
             "Window",
-            "TouchBarUserInterfaceLayoutViewController",
+            "TouchBarUserInterfaceLayoutViewController", 
             "NSToolbarFullScreenWindow",
             "NSTextInputWindowController",
             "StatusBarWindow",
             "NotificationWindow",
-            "ScreenSaverWindow"
+            "ScreenSaverWindow",
+            "",        // Empty title windows are often windowless
+            " ",       // Space-only titles
         ]
         
+        // Check for exact matches and partial matches for excluded titles
         for excluded in excludedTitles {
-            if title.contains(excluded) {
+            if title == excluded || (excluded.count > 2 && title.contains(excluded)) {
                 return false
             }
+        }
+        
+        // Skip windows with generic/placeholder titles that indicate windowless state
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedTitle.isEmpty {
+            return false
         }
         
         // Skip splash screens and loading windows (usually small and temporary)
@@ -335,16 +368,20 @@ class AppManager: ObservableObject {
                 return !title.isEmpty && title != "Desktop"
                 
             case "com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox":
-                // For browsers, count all reasonably sized windows
-                return bounds.width >= 200 && bounds.height >= 200
+                // For browsers, count all reasonably sized windows with meaningful titles
+                return bounds.width >= 200 && bounds.height >= 200 && !trimmedTitle.isEmpty
                 
             case "com.apple.dock":
                 // Never count dock windows
                 return false
                 
             case "com.apple.systempreferences":
-                // Count System Preferences windows
-                return !title.isEmpty
+                // Count System Preferences windows with actual content
+                return !trimmedTitle.isEmpty && trimmedTitle != "Window"
+                
+            case "com.apple.ActivityMonitor":
+                // Activity Monitor often has multiple utility windows
+                return !trimmedTitle.isEmpty && !trimmedTitle.contains("CPU History")
                 
             default:
                 break
@@ -392,7 +429,6 @@ class AppManager: ObservableObject {
             icon: icon,
             url: appURL,
             isPinned: true,
-            windowCount: 0,
             runningApplication: nil,
             windows: [],
             notificationCount: 0,

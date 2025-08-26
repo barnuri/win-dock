@@ -550,7 +550,6 @@ struct WindowsPreviewItem: View {
             icon: NSWorkspace.shared.icon(forFile: "/Applications/Safari.app"),
             url: nil,
             isPinned: true,
-            windowCount: 3,
             runningApplication: nil,
             windows: [],
             notificationCount: 0,

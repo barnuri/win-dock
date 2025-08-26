@@ -11,16 +11,7 @@ struct AppDockItem: View {
     @State private var isDragging = false
     @State private var showWindowPreview = false
     @State private var hidePreviewTask: DispatchWorkItem?
-
-    // Computed properties for cleaner state management
-    private var isActiveApp: Bool { 
-        app.runningApplication?.isActive == true 
-    }
-    
-    private var hasWindows: Bool { 
-        app.windowCount > 0 || !app.windows.isEmpty 
-    }
-    
+      
     private var iconFrame: CGFloat { 
         iconSize * 0.7 
     }
@@ -80,7 +71,7 @@ struct AppDockItem: View {
         let fillColor: Color = {
             if isDragging {
                 return Color.blue.opacity(0.4)
-            } else if isActiveApp {
+            } else if app.isActive {
                 return Color.blue.opacity(0.2)
             } else if isHovering {
                 return Color.white.opacity(0.15)
@@ -94,17 +85,17 @@ struct AppDockItem: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(
-                        isActiveApp ? Color.blue.opacity(0.3) : 
+                        app.isActive ? Color.blue.opacity(0.3) : 
                         isHovering ? Color.white.opacity(0.2) : Color.clear, 
                         lineWidth: 1
                     )
             )
             .shadow(
-                color: isActiveApp ? Color.blue.opacity(0.2) : Color.clear,
-                radius: isActiveApp ? 4 : 0,
+                color: app.isActive ? Color.blue.opacity(0.2) : Color.clear,
+                radius: app.isActive ? 4 : 0,
                 x: 0, y: 1
             )
-            .animation(.easeOut(duration: 0.15), value: isActiveApp)
+            .animation(.easeOut(duration: 0.15), value: app.isActive)
             .animation(.easeOut(duration: 0.1), value: isHovering)
     }
     
@@ -160,14 +151,14 @@ struct AppDockItem: View {
     
     @ViewBuilder
     private var runningIndicator: some View {
-        if isActiveApp {
+        if app.isActive {
             Rectangle()
                 .fill(Color.blue)
                 .frame(width: iconSize * 0.6, height: 2)
                 .cornerRadius(1)
                 .padding(.top, 2)
-                .animation(.easeOut(duration: 0.2), value: isActiveApp)
-        } else if app.isRunning || hasWindows {
+                .animation(.easeOut(duration: 0.2), value: app.isActive)
+        } else if app.hasWindows {
             Circle()
                 .fill(Color.white.opacity(0.9))
                 .frame(width: 4, height: 4)
@@ -176,7 +167,7 @@ struct AppDockItem: View {
                         .stroke(Color.black.opacity(0.2), lineWidth: 0.5)
                 )
                 .padding(.top, 0)
-                .animation(.easeOut(duration: 0.15), value: hasWindows)
+                .animation(.easeOut(duration: 0.15), value: app.hasWindows)
         }
     }
     
@@ -198,7 +189,7 @@ struct AppDockItem: View {
             if app.windowCount > 0 {
                 tooltip += " (\(app.windowCount) window\(app.windowCount == 1 ? "" : "s"))"
             }
-            if isActiveApp {
+            if app.isActive {
                 tooltip += " - Active"
             } else if app.runningApplication?.isHidden == true {
                 tooltip += " - Hidden"
