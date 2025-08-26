@@ -13,7 +13,7 @@ build_and_run() {
 
     # run with logs ./build/Build/Products/Release/WinDock.app
     # ./build/Build/Products/Release/WinDock.app/Contents/MacOS/WinDock
-    open build/Build/Products/Release/WinDock.app 
+    ./open.sh
     # tail with follow ./logs/app.log
     tail -f ./logs/app.log
 }

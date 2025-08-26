@@ -3,30 +3,40 @@ import AppKit
 
 struct TaskViewButton: View {
     @State private var isHovered = false
+    @State private var isPressed = false
     
     var body: some View {
         Button(action: openMissionControl) {
             ZStack {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isHovered ? Color.accentColor.opacity(0.15) : Color.clear)
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isHovered ? Color.blue.opacity(0.12) : Color.clear)
                     .frame(width: 48, height: 38)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(isHovered ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
-                            .animation(.easeInOut(duration: 0.15), value: isHovered)
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(
+                                isHovered ? Color.blue.opacity(0.4) : Color.clear, 
+                                lineWidth: 0.5
+                            )
                     )
                 
                 Image(systemName: "square.grid.3x3")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundColor(.primary)
+                    .brightness(isHovered ? 0.1 : 0.0)
             }
         }
         .buttonStyle(.plain)
+        .scaleEffect(isPressed ? 0.96 : isHovered ? 1.02 : 1.0)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(.easeOut(duration: 0.12)) {
                 isHovered = hovering
             }
         }
+        .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity, pressing: { pressing in
+            withAnimation(.easeOut(duration: 0.08)) {
+                isPressed = pressing
+            }
+        }, perform: {})
         .help("Task View (Mission Control)")
     }
     

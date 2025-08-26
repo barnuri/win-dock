@@ -46,19 +46,19 @@ struct DockView: View {
     @ViewBuilder
     private func dockMainContent(geometry: GeometryProxy) -> some View {
         ZStack(alignment: .bottom) {
-            // Modern taskbar background with optional transparency
-            Rectangle()
+            // Windows 11-style taskbar background with rounded corners and modern materials
+            RoundedRectangle(cornerRadius: dockPosition == .bottom || dockPosition == .top ? 0 : 12)
                 .fill(backgroundMaterial)
                 .opacity(taskbarTransparency)
                 .frame(width: geometry.size.width, height: 54)
                 .overlay(
-                    Rectangle()
+                    RoundedRectangle(cornerRadius: dockPosition == .bottom || dockPosition == .top ? 0 : 12)
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.1),
+                                    Color.white.opacity(0.08),
                                     Color.clear,
-                                    Color.black.opacity(0.05)
+                                    Color.black.opacity(0.03)
                                 ],
                                 startPoint: .top,
                                 endPoint: .bottom
@@ -66,21 +66,21 @@ struct DockView: View {
                         )
                 )
                 .overlay(
-                    Rectangle()
+                    RoundedRectangle(cornerRadius: dockPosition == .bottom || dockPosition == .top ? 0 : 12)
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.2),
+                                    Color.white.opacity(0.15),
                                     Color.clear,
-                                    Color.black.opacity(0.1)
+                                    Color.black.opacity(0.08)
                                 ],
                                 startPoint: .top,
                                 endPoint: .bottom
                             ),
-                            lineWidth: 1
+                            lineWidth: 0.5
                         )
                 )
-                .shadow(color: Color.black.opacity(0.15), radius: 8, x: 0, y: -2)
+                .shadow(color: Color.black.opacity(0.12), radius: 12, x: 0, y: dockPosition == .bottom ? -3 : 3)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     // Single click - do nothing or handle focus
@@ -169,7 +169,7 @@ struct DockView: View {
                             .opacity(dragOverIndex == index ? 0.8 : 0.0)
                             .animation(.easeInOut(duration: 0.15), value: dragOverIndex)
                         
-                        WindowsTaskbarIcon(
+                        AppDockItem(
                             app: app,
                             iconSize: dockSize.iconSize,
                             appManager: appManager
@@ -209,7 +209,7 @@ struct DockView: View {
                             .opacity(dragOverIndex == index ? 0.8 : 0.0)
                             .animation(.easeInOut(duration: 0.15), value: dragOverIndex)
                         
-                        WindowsTaskbarIcon(
+                        AppDockItem(
                             app: app,
                             iconSize: dockSize.iconSize,
                             appManager: appManager

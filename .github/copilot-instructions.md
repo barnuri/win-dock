@@ -39,9 +39,6 @@ GitHub Copilot Coding Guidelines for WinDock (Swift Dock App, like uBar/Windows 
     - Prefer flat and readable method bodies over deeply indented logic.
     - Always use `{` and `}` even for single-line if/guard/else blocks.
 
-9. 🛠️ **After every code edit or suggestion, always run `./build.sh` to ensure the project still builds and works.**
-    - Do not consider an edit complete until the build passes.
-
 Example of Preferred Style:
 
 ❌ Bad: nested and verbose

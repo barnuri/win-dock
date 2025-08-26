@@ -9,29 +9,32 @@ struct SearchButton: View {
     var body: some View {
         Button(action: openSearchApp) {
             ZStack {
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 8)
                     .fill(backgroundFill)
                     .frame(width: 48, height: 38)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(isHovered ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
-                            .animation(.easeInOut(duration: 0.15), value: isHovered)
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(
+                                isHovered ? Color.blue.opacity(0.4) : Color.clear, 
+                                lineWidth: 0.5
+                            )
                     )
                 
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundColor(.primary)
+                    .brightness(isHovered ? 0.1 : 0.0)
             }
         }
         .buttonStyle(.plain)
-        .scaleEffect(isPressed ? 0.95 : 1.0)
+        .scaleEffect(isPressed ? 0.96 : isHovered ? 1.02 : 1.0)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(.easeOut(duration: 0.12)) {
                 isHovered = hovering
             }
         }
         .onLongPressGesture(minimumDuration: 0, maximumDistance: .infinity, pressing: { pressing in
-            withAnimation(.easeInOut(duration: 0.1)) {
+            withAnimation(.easeOut(duration: 0.08)) {
                 isPressed = pressing
             }
         }, perform: {})
@@ -40,10 +43,10 @@ struct SearchButton: View {
     
     private var backgroundFill: some ShapeStyle {
         if isPressed {
-            return AnyShapeStyle(Color.accentColor.opacity(0.2))
+            return AnyShapeStyle(Color.blue.opacity(0.25))
         }
         if isHovered {
-            return AnyShapeStyle(Color.accentColor.opacity(0.15))
+            return AnyShapeStyle(Color.blue.opacity(0.12))
         }
         return AnyShapeStyle(Color.clear)
     }
