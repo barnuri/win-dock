@@ -16,6 +16,10 @@ struct AppContextMenuView: View {
     @ViewBuilder
     private var menuContent: some View {
         if app.isRunning {
+            Button("Open New Window") {
+                appManager.launchNewInstance(app)
+            }
+            
             if app.windowCount > 1 {
                 Button("Show Window Previews") {
                     // This would need to be handled by the parent view

@@ -1,2 +1,2 @@
-- show notification badge on dock app icon if there are notifications in top right corner
-- fix the windows count badge to show correct number of windows
+# WinDock Development Roadmap
+- Fix unminimize issue when clicking on minimized window preview

@@ -26,6 +26,14 @@ struct WindowAttributes {
     let isFullscreen: Bool
 }
 
+struct WindowPreview {
+    let windowID: CGWindowID
+    let title: String
+    let image: NSImage
+    let bounds: CGRect
+    let isMinimized: Bool
+}
+
 struct DockApp: Identifiable, Hashable {
     var id: String { bundleIdentifier }
     let bundleIdentifier: String
@@ -86,10 +94,15 @@ class AppManager: ObservableObject {
     @Published var dockApps: [DockApp] = []
 
     private var appMonitorTimer: Timer?
+    private var workspaceNotificationObservers: [NSObjectProtocol] = []
+    private var cancellables = Set<AnyCancellable>()
     private let pinnedAppsKey = "WinDock.PinnedApps"
     private let dockAppOrderKey = "WinDock.DockAppOrder"
     private var pinnedBundleIdentifiers: Set<String> = []
     private var dockAppOrder: [String] = []
+    private var iconCache: [String: NSImage] = [:]
+    private var windowAttributesCache: [CGWindowID: WindowAttributes] = [:]
+    private var lastUpdateTime: Date = Date()
 
     // Default pinned applications - Windows 11 style defaults
     private let defaultPinnedApps = [
@@ -107,6 +120,15 @@ class AppManager: ObservableObject {
         loadPinnedApps()
         loadDockAppOrder()
         updateDockApps()
+        setupWorkspaceNotifications()
+    }
+    
+    deinit {
+        Task { @MainActor [weak self] in
+            self?.stopMonitoring()
+        }
+        workspaceNotificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        cancellables.removeAll()
     }
 
     func hideOtherApps(except app: DockApp) {
@@ -125,12 +147,93 @@ class AppManager: ObservableObject {
         runningApp.terminate()
     }
 
+    private func setupWorkspaceNotifications() {
+        // Use workspace notifications instead of polling for better performance
+        let workspace = NSWorkspace.shared
+        let center = workspace.notificationCenter
+        
+        // App launch notification
+        let launchObserver = center.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateDockAppsDebounced()
+            }
+        }
+        workspaceNotificationObservers.append(launchObserver)
+        
+        // App terminate notification
+        let terminateObserver = center.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateDockAppsDebounced()
+            }
+        }
+        workspaceNotificationObservers.append(terminateObserver)
+        
+        // App activate notification
+        let activateObserver = center.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateDockAppsDebounced()
+            }
+        }
+        workspaceNotificationObservers.append(activateObserver)
+        
+        // App hide/unhide notifications
+        let hideObserver = center.addObserver(
+            forName: NSWorkspace.didHideApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateDockAppsDebounced()
+            }
+        }
+        workspaceNotificationObservers.append(hideObserver)
+        
+        let unhideObserver = center.addObserver(
+            forName: NSWorkspace.didUnhideApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateDockAppsDebounced()
+            }
+        }
+        workspaceNotificationObservers.append(unhideObserver)
+    }
+    
+    private var updateWorkItem: DispatchWorkItem?
+    
+    private func updateDockAppsDebounced() {
+        // Cancel previous update if it hasn't executed yet
+        updateWorkItem?.cancel()
+        
+        // Create new work item with delay to debounce rapid updates
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.updateDockApps()
+        }
+        updateWorkItem = workItem
+        
+        // Execute after a short delay to batch multiple notifications
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
+    }
+    
     func startMonitoring() {
         // Update immediately
         updateDockApps()
         
-        // Reduce frequency significantly for better performance - 2 seconds instead of 0.5
-        appMonitorTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        // Use reduced polling frequency as backup (5 seconds)
+        appMonitorTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.updateDockApps()
             }
@@ -724,28 +827,82 @@ class AppManager: ObservableObject {
         
         AppLogger.shared.info("Focusing window \(windowID) for app \(app.name)")
         
-        // First ensure the app is unhidden and activated with all windows
+        // Comprehensive activation sequence to ensure window is visible and focused
+        // Step 1: Unhide the app if hidden
         if runningApp.isHidden {
-            _ = runningApp.unhide()
+            let unhideSuccess = runningApp.unhide()
+            AppLogger.shared.info("Unhide result: \(unhideSuccess)")
         }
         
-        // Activate with all windows to ensure proper window management
-        if #available(macOS 14.0, *) {
-            _ = runningApp.activate()
-        } else {
-            _ = runningApp.activate(options: [.activateAllWindows])
-        }
-        
-        // If we have a specific window ID, try multiple approaches to focus it
+        // Step 2: Check if specific window is minimized and unminimize it
         if windowID > 0 {
-            // Small delay to ensure activation completes
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                self.focusSpecificWindow(windowID: windowID, app: app, runningApp: runningApp)
+            if let windowList = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]],
+               let windowInfo = windowList.first {
+                let isMinimized = !(windowInfo[kCGWindowIsOnscreen as String] as? Bool ?? true)
+                if isMinimized {
+                    AppLogger.shared.info("Window \(windowID) is minimized, unminimizing...")
+                    // Use AXUIElement to unminimize the specific window
+                    let axWindow = AXUIElementCreateApplication(runningApp.processIdentifier)
+                    var windowElements: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(axWindow, kAXWindowsAttribute as CFString, &windowElements) == .success,
+                       let windows = windowElements as? [AXUIElement] {
+                        for window in windows {
+                            var windowIDValue: CGWindowID = 0
+                            var idRef: CFTypeRef?
+                            if AXUIElementCopyAttributeValue(window, "_AXWindowNumber" as CFString, &idRef) == .success,
+                               let id = idRef as? Int {
+                                windowIDValue = CGWindowID(id)
+                                if windowIDValue == windowID {
+                                    AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, false as CFTypeRef)
+                                    AppLogger.shared.info("Unminimized window \(windowID) using AXUIElement")
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
             }
+        }
+        
+        // Step 3: Activate the app with all windows
+        var activateSuccess = false
+        if #available(macOS 14.0, *) {
+            activateSuccess = runningApp.activate()
         } else {
-            // No specific window, just ensure app is frontmost
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            activateSuccess = runningApp.activate(options: [.activateAllWindows])
+        }
+        AppLogger.shared.info("Activate result: \(activateSuccess)")
+        
+        // Step 4: Use AppleScript for more reliable window focusing
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            // Unminimize all windows first
+            self.unminimizeAllWindows(for: app, runningApp: runningApp)
+            
+            // Then focus the specific window or bring app to front
+            if windowID > 0 {
+                self.focusSpecificWindow(windowID: windowID, app: app, runningApp: runningApp)
+            } else {
                 self.ensureAppIsFrontmost(app: app, runningApp: runningApp)
+            }
+        }
+    }
+    
+    private func unminimizeAllWindows(for app: DockApp, runningApp: NSRunningApplication) {
+        let script = """
+        tell application "\(app.name)"
+            try
+                set miniaturized of every window to false
+            end try
+        end tell
+        """
+        
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+            if error != nil {
+                AppLogger.shared.warning("Failed to unminimize windows for \(app.name)")
+            } else {
+                AppLogger.shared.info("Unminimized windows for \(app.name)")
             }
         }
     }
@@ -778,10 +935,18 @@ class AppManager: ObservableObject {
             tell application "\(app.name)"
                 activate
                 try
-                    set index of window "\(windowName)" to 1
-                    if minimized of window "\(windowName)" then
-                        set miniaturized of window "\(windowName)" to false
+                    -- First restore if minimized
+                    if (count of windows) > 0 then
+                        repeat with w in windows
+                            if name of w is "\(windowName)" then
+                                set miniaturized of w to false
+                                set index of w to 1
+                                exit repeat
+                            end if
+                        end repeat
                     end if
+                    -- Ensure window is at front
+                    set index of window "\(windowName)" to 1
                 on error errMsg
                     log "Window focus error: " & errMsg
                 end try
@@ -1006,91 +1171,129 @@ class AppManager: ObservableObject {
         if let runningApp = app.runningApplication {
             AppLogger.shared.info("Activating running app: \(app.name)")
             
-            // Ensure the app is unhidden first
+            // Comprehensive activation sequence
+            // Step 1: Unhide the app
             if runningApp.isHidden {
                 let unhideSuccess = runningApp.unhide()
                 AppLogger.shared.info("Unhide app result: \(unhideSuccess)")
             }
             
-            // Activate with enhanced options for better reliability
+            // Step 2: Activate with all windows
             var activateSuccess = false
             if #available(macOS 14.0, *) {
                 activateSuccess = runningApp.activate()
             } else {
-                // Use ActivateAllWindows instead of deprecated ActivateIgnoringOtherApps
                 activateSuccess = runningApp.activate(options: [.activateAllWindows])
             }
             
-            AppLogger.shared.info("Activate app result: \(activateSuccess)")
+            AppLogger.shared.info("Initial activate result: \(activateSuccess) for \(app.name)")
             
-            // Additional step: Use AppleScript for more reliable activation
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                let enhancedActivationScript = """
-                tell application "\(app.name)"
-                    activate
-                end tell
-                tell application "System Events"
-                    tell process "\(runningApp.localizedName ?? app.name)"
-                        set frontmost to true
-                        -- Bring all windows to front if any exist
-                        if (count windows) > 0 then
-                            try
-                                perform action "AXRaise" of window 1
-                            end try
-                        end if
-                    end tell
-                end tell
-                """
-                
-                if let appleScript = NSAppleScript(source: enhancedActivationScript) {
-                    var error: NSDictionary?
-                    appleScript.executeAndReturnError(&error)
-                    if let error = error {
-                        AppLogger.shared.warning("Enhanced activation script failed: \(error)")
-                    } else {
-                        AppLogger.shared.info("Enhanced activation completed successfully")
-                    }
-                }
-            }
-        } else if let appURL = app.url {
-            // Only launch if we have a valid URL and the app exists at that location
-            guard FileManager.default.fileExists(atPath: appURL.path) else {
-                AppLogger.shared.error("App not found at URL: \(appURL.path)")
-                return
-            }
-            
-            AppLogger.shared.info("Launching app from URL: \(appURL.path)")
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = true
-            configuration.promptsUserIfNeeded = false  // Prevent user prompts/popups
-            
-            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { (app, error) in
-                if let error = error {
-                    AppLogger.shared.error("Failed to launch app from URL: \(error.localizedDescription)")
-                }
+            // Step 3: Use AppleScript for comprehensive window restoration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                self.fullyRestoreApp(app, runningApp: runningApp)
             }
         } else {
-            // For apps without a stored URL, only attempt to launch if they're pinned and we can find them silently
-            guard app.isPinned else {
-                AppLogger.shared.warning("App not running and not pinned, skipping launch: \(app.bundleIdentifier)")
-                return
+            // App not running, launch it
+            AppLogger.shared.info("App \(app.name) not running, launching...")
+            launchApp(app)
+        }
+    }
+    
+    private func fullyRestoreApp(_ app: DockApp, runningApp: NSRunningApplication) {
+        let script = """
+        tell application "\(app.name)"
+            activate
+            try
+                -- Unminimize all windows
+                set miniaturized of every window to false
+                -- Bring first window to front
+                if (count of windows) > 0 then
+                    set index of window 1 to 1
+                end if
+            end try
+        end tell
+        tell application "System Events"
+            tell process "\(runningApp.localizedName ?? app.name)"
+                set frontmost to true
+            end tell
+        end tell
+        """
+        
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+            if let error = error {
+                AppLogger.shared.warning("Full restore script failed for \(app.name): \(error)")
+                // Fallback to simpler activation
+                activateAppWithAppleScript(app)
+            } else {
+                AppLogger.shared.info("Successfully restored \(app.name) with all windows")
             }
-            
-            // Try to find the app silently without triggering system dialogs
-            guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier),
-                  FileManager.default.fileExists(atPath: appURL.path) else {
-                AppLogger.shared.error("Could not find application silently: \(app.bundleIdentifier)")
-                return
+        }
+    }
+    
+    private func activateAppWithAppleScript(_ app: DockApp) {
+        let script = """
+        tell application "\(app.name)"
+            activate
+            reopen
+        end tell
+        """
+        
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+            if let error = error {
+                AppLogger.shared.warning("AppleScript activation failed for \(app.name): \(error)")
+            } else {
+                AppLogger.shared.info("AppleScript activation succeeded for \(app.name)")
             }
+        }
+    }
+    
+    private func ensureWindowsVisible(app: DockApp, runningApp: NSRunningApplication) {
+        // Check if any windows are visible
+        let windowList = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
+        let appWindows = windowList.filter { windowInfo in
+            guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32 else { return false }
+            return ownerPID == runningApp.processIdentifier
+        }
+        
+        // If no windows are visible but app has windows, bring them forward
+        if appWindows.isEmpty && app.windowCount > 0 {
+            AppLogger.shared.info("No visible windows for \(app.name), attempting to restore...")
+            let script = """
+            tell application "\(app.name)"
+                activate
+                try
+                    if (count of windows) > 0 then
+                        set miniaturized of every window to false
+                        set index of window 1 to 1
+                    end if
+                end try
+            end tell
+            """
             
-            AppLogger.shared.info("Launching pinned app from bundle identifier: \(appURL.path)")
+            if let appleScript = NSAppleScript(source: script) {
+                var error: NSDictionary?
+                appleScript.executeAndReturnError(&error)
+                if error != nil {
+                    AppLogger.shared.warning("Failed to restore windows for \(app.name)")
+                }
+            }
+        }
+    }
+    
+    func launchApp(_ app: DockApp) {
+        if let appURL = app.url ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier) {
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.activates = true
-            configuration.promptsUserIfNeeded = false  // Prevent user prompts/popups
-            
-            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { (app, error) in
+            configuration.promptsUserIfNeeded = false  // Prevent permission prompts
+            NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
                 if let error = error {
-                    AppLogger.shared.error("Failed to launch app from bundle identifier: \(error.localizedDescription)")
+                    AppLogger.shared.error("Failed to launch \(app.name): \(error)")
+                } else {
+                    AppLogger.shared.info("Successfully launched \(app.name)")
                 }
             }
         }
@@ -1164,14 +1367,11 @@ class AppManager: ObservableObject {
         }
     }
     
-    func launchApp(_ app: DockApp) {
-        activateApp(app)
-    }
-    
     func launchNewInstance(_ app: DockApp) {
         if let appURL = app.url ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier) {
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.createsNewApplicationInstance = true
+            configuration.promptsUserIfNeeded = false  // Prevent permission prompts
             NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
         }
     }

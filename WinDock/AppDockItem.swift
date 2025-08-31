@@ -45,6 +45,7 @@ struct AppDockItem: View {
                         handlePreviewMouseTracking(isInside)
                     }
                 )
+                .transition(.opacity.combined(with: .scale))
         }
         .onTapGesture(perform: handleTap)
         .contextMenu {
@@ -111,10 +112,15 @@ struct AppDockItem: View {
                     .animation(.easeOut(duration: 0.1), value: isHovering)
             }
                         
-            // Notification badge
+            // Notification badge (top-right)
             if app.hasNotifications && app.notificationCount > 0 {
                 notificationBadge
             }
+            
+            // Window count badge (bottom-right) - only show if more than 1 window
+            // if app.windowCount > 1 {
+            //     windowCountBadge
+            // }
         }
     }
     
@@ -146,6 +152,37 @@ struct AppDockItem: View {
                 .offset(x: 2, y: -2)
             }
             Spacer()
+        }
+    }
+    
+    private var windowCountBadge: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                ZStack {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.blue)
+                        .frame(
+                            width: app.windowCount > 9 ? 20 : 16,
+                            height: 14
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.white, lineWidth: 1)
+                        )
+                    
+                    Text("\(app.windowCount)")
+                        .font(.system(
+                            size: 9,
+                            weight: .semibold,
+                            design: .rounded
+                        ))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                }
+                .offset(x: 2, y: 2)
+            }
         }
     }
     
@@ -210,16 +247,21 @@ struct AppDockItem: View {
         hidePreviewTask = nil
         
         if isInside {
-            showWindowPreview = true
+            // Show preview immediately for better responsiveness
+            if app.windowCount > 0 && app.isRunning {
+                showWindowPreview = true
+            }
         } else {
-            // Create a new hide task with delay
+            // Create a new hide task with shorter delay for snappier feel
             let task = DispatchWorkItem {
                 if !self.isHovering {
-                    self.showWindowPreview = false
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        self.showWindowPreview = false
+                    }
                 }
             }
             hidePreviewTask = task
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: task)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: task)
         }
     }
     
@@ -246,17 +288,30 @@ struct AppDockItem: View {
             appManager.activateApp(app)
             return
         }
+        
+        // If app has multiple windows, show preview
         if app.windowCount > 1 {
             AppLogger.shared.info("AppDockItem handleTap for \(app.name), windowCount > 1")
             showWindowPreview = true
             return
         }
+        
+        // If app is not active, activate it (brings windows to front)
+        if !app.isActive {
+            AppLogger.shared.info("AppDockItem handleTap for \(app.name), not active - activating")
+            appManager.activateApp(app)
+            return
+        }
+        
+        // If app is hidden or minimized, restore it
         if app.isHidden || app.isMinimized {
             AppLogger.shared.info("AppDockItem handleTap for \(app.name), isHidden or isMinimized")
             appManager.activateApp(app)
             return
         }
-        AppLogger.shared.info("AppDockItem handleTap for \(app.name), isRunning is true and not Hidden Or Minimized")
+        
+        // App is active and visible, minimize/hide it
+        AppLogger.shared.info("AppDockItem handleTap for \(app.name), isActive and visible - hiding")
         appManager.hideApp(app)
     }
     

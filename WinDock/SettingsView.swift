@@ -33,6 +33,11 @@ struct SettingsView: View {
                     Label("Backup", systemImage: "externaldrive.badge.icloud")
                 }
 
+            KeyboardShortcutsTab()
+                .tabItem {
+                    Label("Shortcuts", systemImage: "keyboard")
+                }
+
             LogsSettingsTab()
                 .tabItem {
                     Label("Logs", systemImage: "doc.text.magnifyingglass")
@@ -488,9 +493,12 @@ struct AppearanceSettingsTab: View {
     @AppStorage("taskbarTransparency") private var taskbarTransparency = 1.0
     @AppStorage("showLabels") private var showLabels = false
     @AppStorage("animationSpeed") private var animationSpeed = 1.0
+    @AppStorage("themeMode") private var themeMode = "auto"
+    @AppStorage("accentColor") private var accentColorName = "blue"
     
     var body: some View {
         Form {
+            themeSection
             taskbarAppearanceSection
             visualEffectsSection
             taskbarItemsSection
@@ -499,13 +507,74 @@ struct AppearanceSettingsTab: View {
         .scrollContentBackground(.hidden)
     }
     
+    private var themeSection: some View {
+        Section("Theme") {
+            Picker("Theme Mode", selection: $themeMode) {
+                Text("Auto").tag("auto")
+                Text("Light").tag("light")
+                Text("Dark").tag("dark")
+            }
+            .pickerStyle(.segmented)
+            
+            Picker("Accent Color", selection: $accentColorName) {
+                HStack {
+                    Circle().fill(Color.blue).frame(width: 12, height: 12)
+                    Text("Blue")
+                }.tag("blue")
+                HStack {
+                    Circle().fill(Color.purple).frame(width: 12, height: 12)
+                    Text("Purple")
+                }.tag("purple")
+                HStack {
+                    Circle().fill(Color.pink).frame(width: 12, height: 12)
+                    Text("Pink")
+                }.tag("pink")
+                HStack {
+                    Circle().fill(Color.red).frame(width: 12, height: 12)
+                    Text("Red")
+                }.tag("red")
+                HStack {
+                    Circle().fill(Color.orange).frame(width: 12, height: 12)
+                    Text("Orange")
+                }.tag("orange")
+                HStack {
+                    Circle().fill(Color.green).frame(width: 12, height: 12)
+                    Text("Green")
+                }.tag("green")
+            }
+        }
+    }
+    
     private var taskbarAppearanceSection: some View {
         Section("Taskbar Appearance") {
             Toggle("Combine taskbar buttons", isOn: $combineTaskbarButtons)
             Toggle("Use small taskbar buttons", isOn: $useSmallTaskbarButtons)
             Toggle("Show labels", isOn: $showLabels)
+            
+            VStack(alignment: .leading) {
+                Text("Icon Size")
+                Picker("Icon Size", selection: $iconSize) {
+                    Text("Small").tag(32)
+                    Text("Medium").tag(40)
+                    Text("Large").tag(48)
+                    Text("Extra Large").tag(56)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+            
+            VStack(alignment: .leading) {
+                Text("Icon Spacing")
+                Slider(value: $iconSpacing, in: 2...20, step: 2)
+                Text("\(Int(iconSpacing)) pixels")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
         }
     }
+    
+    @AppStorage("iconSize") private var iconSize = 40
+    @AppStorage("iconSpacing") private var iconSpacing: Double = 8
     
     private var visualEffectsSection: some View {
         Section("Visual Effects") {
@@ -1339,6 +1408,62 @@ struct RunOnLoginToggleView: View {
                     isEnabled = actualStatus
                 }
             }
+        }
+    }
+}
+
+struct KeyboardShortcutsTab: View {
+    @AppStorage("enableKeyboardShortcuts") private var enableKeyboardShortcuts = true
+    @AppStorage("showDockShortcut") private var showDockShortcut = "⌃Space"
+    @AppStorage("hideDockShortcut") private var hideDockShortcut = "⌃⌥H"
+    @AppStorage("cycleAppsShortcut") private var cycleAppsShortcut = "⌘Tab"
+    
+    var body: some View {
+        Form {
+            Section("Keyboard Shortcuts") {
+                Toggle("Enable keyboard shortcuts", isOn: $enableKeyboardShortcuts)
+                
+                if enableKeyboardShortcuts {
+                    VStack(alignment: .leading, spacing: 12) {
+                        shortcutRow("Show/Hide Dock", shortcut: $showDockShortcut)
+                        shortcutRow("Hide Dock", shortcut: $hideDockShortcut)
+                        shortcutRow("Cycle Through Apps", shortcut: $cycleAppsShortcut)
+                    }
+                    .padding(.top, 8)
+                }
+            }
+            
+            Section("Help") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Modifier Keys:")
+                        .font(.headline)
+                    
+                    Group {
+                        Text("⌘ Command")
+                        Text("⌥ Option (Alt)")
+                        Text("⌃ Control")
+                        Text("⇧ Shift")
+                        Text("⇪ Caps Lock")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 8)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+    }
+    
+    private func shortcutRow(_ title: String, shortcut: Binding<String>) -> some View {
+        HStack {
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            
+            TextField("Shortcut", text: shortcut)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 120)
+                .disabled(true) // For now, just show the shortcuts
         }
     }
 }
