@@ -305,20 +305,44 @@ class NotificationPositionManager: NSObject, ObservableObject {
         })?.processIdentifier else { return false }
 
         let app: AXUIElement = AXUIElementCreateApplication(pid)
-        return findElementWithWidgetIdentifier(root: app) != nil
+        var visitedElements = Set<String>()
+        return findElementWithWidgetIdentifier(root: app, visitedElements: &visitedElements, depth: 0) != nil
     }
 
-    private func findElementWithWidgetIdentifier(root: AXUIElement) -> AXUIElement? {
+    private func findElementWithWidgetIdentifier(root: AXUIElement, visitedElements: inout Set<String>, depth: Int) -> AXUIElement? {
+        // Prevent infinite recursion by limiting depth and tracking visited elements
+        guard depth < 50 else {
+            debugLog("Maximum recursion depth reached in findElementWithWidgetIdentifier")
+            return nil
+        }
+        
+        // Create a unique identifier for this element to detect cycles
+        let elementHash = String(describing: root)
+        if visitedElements.contains(elementHash) {
+            debugLog("Cycle detected in accessibility tree - skipping already visited element")
+            return nil
+        }
+        visitedElements.insert(elementHash)
+        
+        // Check if this element has the widget identifier
         if let identifier: String = getWindowIdentifier(root), identifier.hasPrefix("widget-local") {
             return root
         }
 
+        // Get children with error handling
         var childrenRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(root, kAXChildrenAttribute as CFString, &childrenRef) == .success,
-              let children: [AXUIElement] = childrenRef as? [AXUIElement] else { return nil }
+        let childrenResult = AXUIElementCopyAttributeValue(root, kAXChildrenAttribute as CFString, &childrenRef)
+        guard childrenResult == .success,
+              let children: [AXUIElement] = childrenRef as? [AXUIElement] else {
+            if childrenResult != .noValue && childrenResult != .attributeUnsupported {
+                debugLog("Failed to get children for accessibility element: \(childrenResult)")
+            }
+            return nil
+        }
 
+        // Recursively search children
         for child: AXUIElement in children {
-            if let found: AXUIElement = findElementWithWidgetIdentifier(root: child) {
+            if let found: AXUIElement = findElementWithWidgetIdentifier(root: child, visitedElements: &visitedElements, depth: depth + 1) {
                 return found
             }
         }
@@ -327,9 +351,16 @@ class NotificationPositionManager: NSObject, ObservableObject {
     
     private func getWindowIdentifier(_ element: AXUIElement) -> String? {
         var identifierRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, kAXIdentifierAttribute as CFString, &identifierRef) == .success else {
+        let result = AXUIElementCopyAttributeValue(element, kAXIdentifierAttribute as CFString, &identifierRef)
+        
+        guard result == .success else {
+            // Don't log for common cases where identifier is not available
+            if result != .noValue && result != .attributeUnsupported {
+                debugLog("Failed to get window identifier: \(result)")
+            }
             return nil
         }
+        
         return identifierRef as? String
     }
 
@@ -362,6 +393,16 @@ class NotificationPositionManager: NSObject, ObservableObject {
     }
 
     private func findElementWithSubrole(root: AXUIElement, targetSubroles: [String]) -> AXUIElement? {
+        return findElementWithSubrole(root: root, targetSubroles: targetSubroles, depth: 0)
+    }
+    
+    private func findElementWithSubrole(root: AXUIElement, targetSubroles: [String], depth: Int) -> AXUIElement? {
+        // Prevent infinite recursion by limiting depth
+        guard depth < 20 else {
+            debugLog("Maximum recursion depth reached in findElementWithSubrole")
+            return nil
+        }
+        
         var subroleRef: AnyObject?
         if AXUIElementCopyAttributeValue(root, kAXSubroleAttribute as CFString, &subroleRef) == .success {
             if let subrole: String = subroleRef as? String, targetSubroles.contains(subrole) {
@@ -370,14 +411,18 @@ class NotificationPositionManager: NSObject, ObservableObject {
         }
 
         var childrenRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(root, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+        let childrenResult = AXUIElementCopyAttributeValue(root, kAXChildrenAttribute as CFString, &childrenRef)
+        guard childrenResult == .success,
               let children: [AXUIElement] = childrenRef as? [AXUIElement]
         else {
+            if childrenResult != .noValue && childrenResult != .attributeUnsupported {
+                debugLog("Failed to get children in findElementWithSubrole: \(childrenResult)")
+            }
             return nil
         }
 
         for child: AXUIElement in children {
-            if let found: AXUIElement = findElementWithSubrole(root: child, targetSubroles: targetSubroles) {
+            if let found: AXUIElement = findElementWithSubrole(root: child, targetSubroles: targetSubroles, depth: depth + 1) {
                 return found
             }
         }
