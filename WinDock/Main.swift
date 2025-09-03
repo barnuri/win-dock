@@ -218,6 +218,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let viewMenuItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
         
+        // Add hide/show dock option
+        let visibilityManager = DockVisibilityManager.shared
+        let visibilityMenuItem = NSMenuItem(title: visibilityManager.visibilityDisplayName, action: #selector(toggleDockVisibility), keyEquivalent: "")
+        visibilityMenuItem.target = self
+        viewMenu.addItem(visibilityMenuItem)
+        
+        viewMenu.addItem(NSMenuItem.separator())
+        
         // Add dock position submenu
         let positionMenu = NSMenu()
         for pos in DockPosition.allCases {
@@ -367,6 +375,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
         
        
+        // Hide/Show Dock option
+        let visibilityManager = DockVisibilityManager.shared
+        let visibilityItem = NSMenuItem(title: visibilityManager.visibilityDisplayName, action: #selector(toggleDockVisibility), keyEquivalent: "")
+        visibilityItem.target = self
+        menu.addItem(visibilityItem)
+        
+        menu.addItem(NSMenuItem.separator())
+        
         // Settings menu item
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettingsMenu), keyEquivalent: ",")
         settingsItem.target = self
@@ -513,6 +529,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc private func quitApp() {
         NSApplication.shared.terminate(nil)
+    }
+    
+    @objc private func toggleDockVisibility() {
+        DockVisibilityManager.shared.toggleVisibility()
     }
     
     private func checkAndRequestAppleEventsAuthorization() {

@@ -3,9 +3,16 @@ import AppKit
 
 struct DockContextMenuView: View {
     let appManager: AppManager
+    @StateObject private var visibilityManager = DockVisibilityManager.shared
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            Button(visibilityManager.visibilityDisplayName) {
+                visibilityManager.toggleVisibility()
+            }
+            
+            Divider()
+            
             Button("Show Desktop") {
                 showDesktop()
             }

@@ -594,6 +594,7 @@ struct UserProfileView: View {
 
 struct UserProfilePopover: View {
     @ObservedObject var userProfileManager: UserProfileManager
+    @StateObject private var visibilityManager = DockVisibilityManager.shared
     
     var body: some View {
         VStack(spacing: 12) {
@@ -625,6 +626,14 @@ struct UserProfilePopover: View {
                         .foregroundColor(.secondary)
                 }
             }
+            
+            Divider()
+            
+            // Dock visibility toggle
+            Button(visibilityManager.visibilityDisplayName) {
+                visibilityManager.toggleVisibility()
+            }
+            .buttonStyle(.bordered)
             
             Divider()
             

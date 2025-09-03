@@ -30,6 +30,7 @@ class DockWindow: NSPanel {
     private var dockView: NSHostingView<DockView>?
     private var cancellables = Set<AnyCancellable>()
     private let fullscreenManager = FullscreenDetectionManager.shared
+    private let visibilityManager = DockVisibilityManager.shared
     
     convenience init() {
         self.init(contentRect: NSRect(x: 0, y: 0, width: 100, height: 60),
@@ -73,6 +74,9 @@ class DockWindow: NSPanel {
         updatePosition()
         appManager.startMonitoring()
         
+        // Register the dock window with the visibility manager
+        visibilityManager.addDockWindow(self)
+        
         // Start fullscreen detection for auto-hide functionality
         fullscreenManager.startMonitoring()
         
@@ -108,23 +112,14 @@ class DockWindow: NSPanel {
     
     private func handleFullscreenStateChange(_ hasFullscreen: Bool) {
         if hasFullscreen {
-            // Only hide dock when there's a fullscreen window AND auto-hide is enabled
-            if autoHide {
-                hideTimer?.invalidate()
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.3
-                    self.animator().alphaValue = 0.0
-                }
-            }
-            // AppLogger.shared.info("Dock hidden due to fullscreen window")
+            // Always hide dock when there's a fullscreen window (Windows-like behavior)
+            // Use the visibility manager's dedicated fullscreen method
+            visibilityManager.hideForFullscreen()
+            AppLogger.shared.info("Dock hidden due to fullscreen window")
         } else {
-            // Show dock when no fullscreen windows, unless auto-hide is enabled and mouse isn't over dock
-            hideTimer?.invalidate()
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.3
-                self.animator().alphaValue = 1.0
-            }
-            // AppLogger.shared.info("Dock shown - no fullscreen windows")
+            // Show dock when no fullscreen windows, unless manually hidden
+            visibilityManager.showAfterFullscreen()
+            AppLogger.shared.info("Dock shown - no fullscreen windows")
         }
     }
     override var canBecomeKey: Bool { false }
@@ -298,6 +293,8 @@ class DockWindow: NSPanel {
             }
             cleanup()
         }
+        // Unregister the dock window from the visibility manager
+        visibilityManager.removeDockWindow(self)
     }
 }
 
