@@ -127,7 +127,7 @@ class NotificationPositionManager: NSObject, ObservableObject {
         lastError = nil
         debugLog("Observer setup complete for Notification Center (PID: \(pid))")
 
-        widgetMonitorTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
+        widgetMonitorTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             self.checkForWidgetChanges()
         }
         

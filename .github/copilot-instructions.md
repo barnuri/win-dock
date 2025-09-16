@@ -170,6 +170,66 @@ func validate(user: User?) -> Bool {
     - Implement proper error propagation with `Result` types
     - Use `UserDefaults` with `@AppStorage` for simple persistence
 
+**UI Performance & Responsiveness (Critical for Dock Stability)**
+
+15. 🚫 **NEVER block the main thread - prevent dock freezing/stacking:**
+    - Move ALL heavy computations to background queues using `Task.detached(priority: .background)`
+    - Use `await withTaskGroup` for concurrent processing of multiple items
+    - Implement async versions of expensive operations (window enumeration, app scanning)
+    - Always use `@MainActor` for UI updates and mark UI-related methods accordingly
+
+16. ⏱️ **Implement debouncing for frequent updates:**
+    - Debounce rapid state changes (app launches, window updates, mouse tracking) with 50-100ms delays
+    - Use `DispatchWorkItem` to cancel pending updates when new ones arrive
+    - Batch multiple notifications into single UI updates to prevent excessive refreshes
+    - Cache expensive computed properties and invalidate only when underlying data changes
+
+17. 🎯 **Optimize SwiftUI view performance:**
+    - Use `ForEach(Array(enumerated()), id: \.element.id)` instead of `firstIndex` in loops
+    - Implement view memoization for expensive computations with `@State` cached results
+    - Minimize the number of `@Published` properties - combine related state into single objects
+    - Use `equatable` conformance on complex data types to prevent unnecessary view updates
+
+18. 🔄 **Prevent excessive UI recomposition:**
+    - Cache computed views and styles with `@State` when based on stable data
+    - Use `onChange` with proper debouncing instead of frequent property observers
+    - Avoid creating new objects in view `body` - extract to `@State` or computed properties
+    - Minimize animation complexity and duration (prefer 0.1s over 0.15s+ for dock responsiveness)
+
+19. 📊 **Optimize data operations:**
+    - Use concurrent `TaskGroup` for processing collections of apps/windows
+    - Implement lazy evaluation for expensive operations (only compute when needed)
+    - Cache frequently accessed data (app icons, window info) with proper invalidation
+    - Use `async/await` with proper task cancellation for interruptible operations
+
+20. 🎨 **SwiftUI-specific anti-patterns to avoid:**
+    - Never perform network/file operations directly in view `body`
+    - Avoid creating `Timer` objects in views - use centralized managers
+    - Don't use `DispatchQueue.main.sync` - it can cause deadlocks
+    - Minimize use of `.onReceive` - prefer `@StateObject` with `@Published` properties
+
+**Example: Converting blocking operation to async**
+```swift
+// ❌ BAD: Blocks UI thread
+func updateApps() {
+    let apps = getExpensiveAppList() // Blocks main thread
+    self.dockApps = apps
+}
+
+// ✅ GOOD: Async with proper threading
+func updateApps() {
+    Task { @MainActor in
+        let apps = await withTaskGroup(of: [DockApp].self) { group in
+            group.addTask {
+                await self.computeExpensiveAppList() // Background thread
+            }
+            // ... process results
+        }
+        self.dockApps = apps // UI update on main thread
+    }
+}
+```
+
 ---
 
 _These guidelines align with Apple's Swift API Design Guidelines and the Swift Standard Library Programmer's Manual._

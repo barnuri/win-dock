@@ -101,8 +101,7 @@ class AppManager: ObservableObject {
     private var pinnedBundleIdentifiers: Set<String> = []
     private var dockAppOrder: [String] = []
     private var iconCache: [String: NSImage] = [:]
-    private var windowAttributesCache: [CGWindowID: WindowAttributes] = [:]
-    private var lastUpdateTime: Date = Date()
+    private var windowAttributesCache: [CGWindowID: WindowAttributes] = [:] 
 
     // Default pinned applications - Windows 11 style defaults
     private let defaultPinnedApps = [
@@ -213,27 +212,42 @@ class AppManager: ObservableObject {
     }
     
     private var updateWorkItem: DispatchWorkItem?
+    private let updateQueue = DispatchQueue(label: "com.windock.appmanager.update", qos: .userInitiated)
+    private var lastUpdateTime: Date = Date.distantPast
+    private let minUpdateInterval: TimeInterval = 0.2 // Minimum 200ms between updates
     
     private func updateDockAppsDebounced() {
         // Cancel previous update if it hasn't executed yet
         updateWorkItem?.cancel()
         
-        // Create new work item with delay to debounce rapid updates
+        // Check if enough time has passed since last update
+        let now = Date()
+        let timeSinceLastUpdate = now.timeIntervalSince(lastUpdateTime)
+        
+        // If too soon, schedule for later
+        let delay = timeSinceLastUpdate < minUpdateInterval ? 
+                   (minUpdateInterval - timeSinceLastUpdate) + 0.05 : 0.05
+        
+        // Create new work item with adaptive delay
         let workItem = DispatchWorkItem { [weak self] in
-            self?.updateDockApps()
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.lastUpdateTime = Date()
+                await self.updateDockAppsAsync()
+            }
         }
         updateWorkItem = workItem
         
-        // Execute after a short delay to batch multiple notifications
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
+        // Execute after adaptive delay to prevent update storms
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
     
     func startMonitoring() {
         // Update immediately
         updateDockApps()
         
-        // Use reduced polling frequency as backup (5 seconds)
-        appMonitorTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+        // Use reduced polling frequency as backup (10 seconds)
+        appMonitorTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.updateDockApps()
             }
@@ -283,6 +297,31 @@ class AppManager: ObservableObject {
     }
     
     private func updateDockApps() {
+        Task { @MainActor in
+            await updateDockAppsAsync()
+        }
+    }
+    
+    private func updateDockAppsAsync() async {
+        // Move heavy computation to background
+        let newDockApps = await withTaskGroup(of: [DockApp].self) { group in
+            group.addTask { [weak self] in
+                await self?.computeDockApps() ?? []
+            }
+            
+            var result: [DockApp] = []
+            for await apps in group {
+                result = apps
+            }
+            return result
+        }
+        
+        // Update UI on main thread
+        dockApps = newDockApps
+    }
+    
+    @MainActor
+    private func computeDockApps() async -> [DockApp] {
         // Performance: Cache running apps to avoid multiple queries
         let runningApps = NSWorkspace.shared.runningApplications
             .filter { app in
@@ -294,32 +333,27 @@ class AppManager: ObservableObject {
         var newDockApps: [DockApp] = []
         var processedBundleIds: Set<String> = []
 
-        // Add running applications
-        for app in runningApps {
-            guard let bundleId = app.bundleIdentifier,
-                  !processedBundleIds.contains(bundleId) else { continue }
+        // Use concurrent processing for heavy operations
+        await withTaskGroup(of: DockApp?.self) { group in
+            for app in runningApps {
+                guard let bundleId = app.bundleIdentifier,
+                      !processedBundleIds.contains(bundleId) else { continue }
 
-            processedBundleIds.insert(bundleId)
+                processedBundleIds.insert(bundleId)
+                
+                group.addTask { [weak self] in
+                    await self?.createDockApp(for: app, bundleId: bundleId)
+                }
+            }
             
-            // Get windows for all running apps to properly show indicators
-            let windows = getWindowsForApp(app)
-            let (hasNotifications, notificationCount) = getNotificationInfo(for: app)
-
-            let dockApp = DockApp(
-                bundleIdentifier: bundleId,
-                name: app.localizedName ?? bundleId,
-                icon: app.icon,
-                url: app.bundleURL,
-                isPinned: pinnedBundleIdentifiers.contains(bundleId),
-                runningApplication: app,
-                windows: windows,
-                notificationCount: notificationCount,
-                hasNotifications: hasNotifications
-            )
-            newDockApps.append(dockApp)
+            for await dockApp in group {
+                if let app = dockApp {
+                    newDockApps.append(app)
+                }
+            }
         }
 
-        // Add pinned apps that aren't running
+        // Add pinned apps that aren't running (lightweight operation)
         for bundleId in pinnedBundleIdentifiers {
             if !processedBundleIds.contains(bundleId) {
                 if let app = createDockAppForBundleId(bundleId) {
@@ -330,8 +364,25 @@ class AppManager: ObservableObject {
 
         // Reorder based on saved order
         reorderApps(&newDockApps)
+        return newDockApps
+    }
+    
+    private func createDockApp(for app: NSRunningApplication, bundleId: String) async -> DockApp? {
+        // Get windows for all running apps to properly show indicators
+        let windows = await getWindowsForAppAsync(app)
+        let (hasNotifications, notificationCount) = await getNotificationInfoAsync(for: app)
 
-        dockApps = newDockApps
+        return DockApp(
+            bundleIdentifier: bundleId,
+            name: app.localizedName ?? bundleId,
+            icon: app.icon,
+            url: app.bundleURL,
+            isPinned: pinnedBundleIdentifiers.contains(bundleId),
+            runningApplication: app,
+            windows: windows,
+            notificationCount: notificationCount,
+            hasNotifications: hasNotifications
+        )
     }
     
     private func reorderApps(_ apps: inout [DockApp]) {
@@ -366,6 +417,137 @@ class AppManager: ObservableObject {
     }
     
     private func getWindowsForApp(_ app: NSRunningApplication) -> [WindowInfo] {
+        // Use the synchronous version directly
+        return getWindowsForAppSync(app)
+    }
+    
+    private func getWindowsForAppAsync(_ app: NSRunningApplication) async -> [WindowInfo] {
+        // Move heavy AX API operations to background using Task.detached
+        return await Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return [] }
+            
+            // Capture app info needed for background processing
+            let processIdentifier = app.processIdentifier
+            let bundleIdentifier = app.bundleIdentifier ?? ""
+            
+            return await withTaskGroup(of: [WindowInfo].self) { group in
+                // Add task for AX window enumeration
+                group.addTask {
+                    await self.getAXWindowsAsync(pid: processIdentifier, bundleID: bundleIdentifier)
+                }
+                
+                var allWindows: [WindowInfo] = []
+                for await windows in group {
+                    allWindows.append(contentsOf: windows)
+                }
+                
+                return allWindows
+            }
+        }.value
+    }
+    
+    /// Async version of AX window enumeration for background processing
+    private func getAXWindowsAsync(pid: pid_t, bundleID: String) async -> [WindowInfo] {
+        // Create AXUIElement for the application
+        let axApp = AXUIElementCreateApplication(pid)
+        
+        // Get AX windows using accessibility API (like alt-tab-macos)
+        let axWindows = getAXWindows(axApp: axApp, pid: pid)
+        
+        // Also get Core Graphics windows for comparison and additional info
+        guard let cgWindowList = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+        
+        // Process windows concurrently in background
+        return await processAXWindowsConcurrently(axWindows: axWindows, cgWindowList: cgWindowList, pid: pid, bundleID: bundleID)
+    }
+    
+    /// Process AX windows concurrently for better performance
+    private func processAXWindowsConcurrently(axWindows: [AXUIElement], cgWindowList: [[String: Any]], pid: pid_t, bundleID: String) async -> [WindowInfo] {
+        return await withTaskGroup(of: WindowInfo?.self) { group in
+            // Process each window concurrently
+            for axWindow in axWindows {
+                group.addTask {
+                    return await self.processSingleAXWindow(axWindow: axWindow, cgWindowList: cgWindowList, pid: pid, bundleID: bundleID)
+                }
+            }
+            
+            var windows: [WindowInfo] = []
+            for await window in group {
+                if let window = window {
+                    windows.append(window)
+                }
+            }
+            
+            return windows
+        }
+    }
+    
+    /// Process a single AX window asynchronously
+    private func processSingleAXWindow(axWindow: AXUIElement, cgWindowList: [[String: Any]], pid: pid_t, bundleID: String) async -> WindowInfo? {
+        // Get window ID through AX API
+        guard let windowID = getWindowID(from: axWindow) else { return nil }
+        
+        // Get window attributes from AX API
+        guard let windowAttributes = getWindowAttributes(from: axWindow) else { return nil }
+        
+        // Find matching CG window for additional info
+        var cgWindowInfo: [String: Any]?
+        for info in cgWindowList {
+            if let cgWindowID = info[kCGWindowNumber as String] as? CGWindowID,
+               cgWindowID == windowID,
+               let ownerPID = info[kCGWindowOwnerPID as String] as? Int32,
+               ownerPID == pid {
+                cgWindowInfo = info
+                break
+            }
+        }
+        
+        // Get bounds from CG info or calculate from AX
+        let bounds: CGRect
+        if let cgInfo = cgWindowInfo,
+           let boundsDict = cgInfo[kCGWindowBounds as String] as? [String: Any],
+           let cgBounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) {
+            bounds = cgBounds
+        } else {
+            // Fallback: get position and size from AX API
+            bounds = getWindowBounds(from: axWindow) ?? CGRect.zero
+        }
+        
+        let isOnScreen = cgWindowInfo?[kCGWindowIsOnscreen as String] as? Bool ?? false
+        let level = getWindowLevel(windowID: windowID)
+        
+        // Create a temporary NSRunningApplication for validation
+        let runningApps = NSWorkspace.shared.runningApplications
+        guard let app = runningApps.first(where: { $0.processIdentifier == pid }) else { return nil }
+        
+        // Apply alt-tab-macos filtering logic using AX attributes
+        if isActualWindow(
+            axWindow: axWindow,
+            windowID: windowID,
+            level: level,
+            title: windowAttributes.title,
+            subrole: windowAttributes.subrole,
+            role: windowAttributes.role,
+            size: bounds.size,
+            isMinimized: windowAttributes.isMinimized,
+            isFullscreen: windowAttributes.isFullscreen,
+            app: app
+        ) {
+            return WindowInfo(
+                title: windowAttributes.title ?? "",
+                windowID: windowID,
+                bounds: bounds,
+                isMinimized: windowAttributes.isMinimized,
+                isOnScreen: isOnScreen
+            )
+        }
+        
+        return nil
+    }
+    
+    private func getWindowsForAppSync(_ app: NSRunningApplication) -> [WindowInfo] {
         var windows: [WindowInfo] = []
         
         // Create AXUIElement for the application
@@ -437,12 +619,13 @@ class AppManager: ObservableObject {
                 windows.append(window)
             }
         }
-               
+        
         return windows
     }
+
     
     /// Gets AX windows using accessibility API like alt-tab-macos
-    private func getAXWindows(axApp: AXUIElement, pid: pid_t) -> [AXUIElement] {
+    nonisolated private func getAXWindows(axApp: AXUIElement, pid: pid_t) -> [AXUIElement] {
         var axWindows: [AXUIElement] = []
         
         // Get windows using standard AX API
@@ -461,7 +644,7 @@ class AppManager: ObservableObject {
     }
     
     /// Brute-force window detection like alt-tab-macos for windows on other spaces
-    private func getWindowsByBruteForce(pid: pid_t) -> [AXUIElement] {
+    nonisolated private func getWindowsByBruteForce(pid: pid_t) -> [AXUIElement] {
         var axWindows: [AXUIElement] = []
         
         // Create remote token for _AXUIElementCreateWithRemoteToken
@@ -490,14 +673,14 @@ class AppManager: ObservableObject {
     }
     
     /// Get window ID from AXUIElement using private API
-    private func getWindowID(from axWindow: AXUIElement) -> CGWindowID? {
+    nonisolated private func getWindowID(from axWindow: AXUIElement) -> CGWindowID? {
         var windowID: CGWindowID = 0
         let result = _AXUIElementGetWindow(axWindow, &windowID)
         return result == .success ? windowID : nil
     }
     
     /// Get window attributes from AXUIElement
-    private func getWindowAttributes(from axWindow: AXUIElement) -> WindowAttributes? {
+    nonisolated private func getWindowAttributes(from axWindow: AXUIElement) -> WindowAttributes? {
         do {
             let title = try getTitle(from: axWindow)
             let role = try getRole(from: axWindow)
@@ -518,7 +701,7 @@ class AppManager: ObservableObject {
     }
     
     /// Get window bounds from AXUIElement
-    private func getWindowBounds(from axWindow: AXUIElement) -> CGRect? {
+    nonisolated private func getWindowBounds(from axWindow: AXUIElement) -> CGRect? {
         do {
             let position = try getPosition(from: axWindow)
             let size = try getSize(from: axWindow)
@@ -534,37 +717,37 @@ class AppManager: ObservableObject {
     
     // MARK: - AX Attribute Helpers
     
-    private func getTitle(from axWindow: AXUIElement) throws -> String? {
+    nonisolated private func getTitle(from axWindow: AXUIElement) throws -> String? {
         var titleRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(axWindow, kAXTitleAttribute as CFString, &titleRef)
         return result == .success ? (titleRef as? String) : nil
     }
     
-    private func getRole(from axWindow: AXUIElement) throws -> String? {
+    nonisolated private func getRole(from axWindow: AXUIElement) throws -> String? {
         var roleRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(axWindow, kAXRoleAttribute as CFString, &roleRef)
         return result == .success ? (roleRef as? String) : nil
     }
     
-    private func getSubrole(from axWindow: AXUIElement) throws -> String? {
+    nonisolated private func getSubrole(from axWindow: AXUIElement) throws -> String? {
         var subroleRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(axWindow, kAXSubroleAttribute as CFString, &subroleRef)
         return result == .success ? (subroleRef as? String) : nil
     }
     
-    private func getIsMinimized(from axWindow: AXUIElement) throws -> Bool {
+    nonisolated private func getIsMinimized(from axWindow: AXUIElement) throws -> Bool {
         var minimizedRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(axWindow, kAXMinimizedAttribute as CFString, &minimizedRef)
         return result == .success ? (minimizedRef as? Bool ?? false) : false
     }
     
-    private func getIsFullscreen(from axWindow: AXUIElement) throws -> Bool {
+    nonisolated private func getIsFullscreen(from axWindow: AXUIElement) throws -> Bool {
         var fullscreenRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(axWindow, kAXFullscreenAttribute as CFString, &fullscreenRef)
         return result == .success ? (fullscreenRef as? Bool ?? false) : false
     }
     
-    private func getPosition(from axWindow: AXUIElement) throws -> CGPoint? {
+    nonisolated private func getPosition(from axWindow: AXUIElement) throws -> CGPoint? {
         var positionRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &positionRef)
         
@@ -577,7 +760,7 @@ class AppManager: ObservableObject {
         return nil
     }
     
-    private func getSize(from axWindow: AXUIElement) throws -> CGSize? {
+    nonisolated private func getSize(from axWindow: AXUIElement) throws -> CGSize? {
         var sizeRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &sizeRef)
         
@@ -591,7 +774,7 @@ class AppManager: ObservableObject {
     }
     
     /// Determines if a window is an actual user window using AX attributes (like alt-tab-macos)
-    private func isActualWindow(
+    nonisolated private func isActualWindow(
         axWindow: AXUIElement,
         windowID: CGWindowID,
         level: CGWindowLevel,
@@ -636,7 +819,7 @@ class AppManager: ObservableObject {
     }
     
     /// Check for special app cases that need custom handling
-    private func isSpecialApp(bundleID: String, title: String?, role: String?, subrole: String?, level: CGWindowLevel, size: CGSize) -> Bool {
+    nonisolated private func isSpecialApp(bundleID: String, title: String?, role: String?, subrole: String?, level: CGWindowLevel, size: CGSize) -> Bool {
         let normalLevel = CGWindowLevelForKey(.normalWindow)
         
         // Books.app has animations during window creation
@@ -707,7 +890,7 @@ class AppManager: ObservableObject {
     }
     
     /// Validate standard windows with proper subroles
-    private func isValidStandardWindow(bundleID: String, title: String?, size: CGSize, subrole: String) -> Bool {
+    nonisolated private func isValidStandardWindow(bundleID: String, title: String?, size: CGSize, subrole: String) -> Bool {
         // JetBrains apps need title and proper size
         if bundleID.hasPrefix("com.jetbrains.") || bundleID.hasPrefix("com.google.android.studio") {
             return title != nil && !title!.isEmpty && size.width > 100 && size.height > 100
@@ -723,7 +906,7 @@ class AppManager: ObservableObject {
     }
     
     /// Validate floating windows (only specific apps allowed)
-    private func isValidFloatingWindow(bundleID: String, title: String?, role: String?, subrole: String?, size: CGSize) -> Bool {
+    nonisolated private func isValidFloatingWindow(bundleID: String, title: String?, role: String?, subrole: String?, size: CGSize) -> Bool {
         // IINA floating video windows
         if bundleID == "com.colliderli.iina" {
             return true
@@ -742,7 +925,7 @@ class AppManager: ObservableObject {
         return false
     }
     
-    private func getWindowLevel(windowID: CGWindowID) -> CGWindowLevel {
+    nonisolated private func getWindowLevel(windowID: CGWindowID) -> CGWindowLevel {
         var level: CGWindowLevel = 0
         let cgsConnection = CGSMainConnectionID()
         _ = CGSGetWindowLevel(cgsConnection, windowID, &level)
@@ -1405,6 +1588,20 @@ class AppManager: ObservableObject {
     }
     
     private func getNotificationInfo(for app: NSRunningApplication) -> (hasNotifications: Bool, notificationCount: Int) {
+        // Sync wrapper for backward compatibility
+        var result: (hasNotifications: Bool, notificationCount: Int) = (false, 0)
+        let semaphore = DispatchSemaphore(value: 0)
+        
+        Task {
+            result = await getNotificationInfoAsync(for: app)
+            semaphore.signal()
+        }
+        
+        semaphore.wait()
+        return result
+    }
+    
+    private func getNotificationInfoAsync(for app: NSRunningApplication) async -> (hasNotifications: Bool, notificationCount: Int) {
         guard let bundleIdentifier = app.bundleIdentifier else {
             return (false, 0)
         }

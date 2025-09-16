@@ -29,6 +29,10 @@ struct DockContextMenuView: View {
             
             Divider()
             
+            Button("Restart WinDock") {
+                restartWinDock()
+            }
+            
             Button("Quit WinDock") {
                 quitWinDock()
             }
@@ -80,6 +84,11 @@ struct DockContextMenuView: View {
     private func openSettings() {
         AppLogger.shared.info("Opening settings from DockContextMenuView")
         SettingsHelper.shared.requestOpenSettings()
+    }
+    
+    private func restartWinDock() {
+        AppLogger.shared.info("Restarting WinDock from dock context menu")
+        restartApplication()
     }
     
     private func quitWinDock() {
@@ -134,6 +143,26 @@ struct DockContextMenuView: View {
             
             // Hide the application
             app.hide()
+        }
+    }
+    
+    private func restartApplication() {
+        let appPath = Bundle.main.bundlePath
+        let relaunchPath = "/usr/bin/open"
+        
+        // Create a task to relaunch the app
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: relaunchPath)
+        task.arguments = ["-n", appPath]
+        
+        do {
+            try task.run()
+            // Quit current instance after launching new one
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                NSApplication.shared.terminate(nil)
+            }
+        } catch {
+            AppLogger.shared.error("Failed to restart application: \(error)")
         }
     }
     

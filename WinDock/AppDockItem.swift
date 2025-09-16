@@ -10,7 +10,11 @@ struct AppDockItem: View {
     @State private var isHovering = false
     @State private var isDragging = false
     @State private var showWindowPreview = false
-    @State private var hidePreviewTask: DispatchWorkItem?
+    @State private var hidePreviewTask: Task<Void, Never>?
+    @State private var autoHidePreviewTask: Task<Void, Never>?
+    @State private var previewDebounceTask: Task<Void, Never>?
+    @State private var lastPreviewUpdate: Date = Date()
+    private let previewDebounceDelay: TimeInterval = 0.15
       
     private var iconFrame: CGFloat { 
         iconSize * 0.7 
@@ -68,7 +72,17 @@ struct AppDockItem: View {
     
     // MARK: - View Components
     
+    @State private var lastBackgroundState: (isDragging: Bool, isActive: Bool, isHovering: Bool) = (false, false, false)
+    @State private var cachedBackgroundView: AnyView?
+    
     private var backgroundStyle: some View {
+        let currentState = (isDragging: isDragging, isActive: app.isActive, isHovering: isHovering)
+        
+        // Return cached view if state hasn't changed
+        if currentState == lastBackgroundState, let cached = cachedBackgroundView {
+            return cached
+        }
+        
         let fillColor: Color = {
             if isDragging {
                 return Color.blue.opacity(0.4)
@@ -81,23 +95,33 @@ struct AppDockItem: View {
             }
         }()
         
-        return RoundedRectangle(cornerRadius: 6)
-            .fill(fillColor)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(
-                        app.isActive ? Color.blue.opacity(0.3) : 
-                        isHovering ? Color.white.opacity(0.2) : Color.clear, 
-                        lineWidth: 1
-                    )
-            )
-            .shadow(
-                color: app.isActive ? Color.blue.opacity(0.2) : Color.clear,
-                radius: app.isActive ? 4 : 0,
-                x: 0, y: 1
-            )
-            .animation(.easeOut(duration: 0.15), value: app.isActive)
-            .animation(.easeOut(duration: 0.1), value: isHovering)
+        let backgroundView = AnyView(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(fillColor)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(
+                            app.isActive ? Color.blue.opacity(0.3) : 
+                            isHovering ? Color.white.opacity(0.2) : Color.clear, 
+                            lineWidth: 1
+                        )
+                )
+                .shadow(
+                    color: app.isActive ? Color.blue.opacity(0.2) : Color.clear,
+                    radius: app.isActive ? 4 : 0,
+                    x: 0, y: 1
+                )
+                .animation(.easeOut(duration: 0.1), value: app.isActive)
+                .animation(.easeOut(duration: 0.08), value: isHovering)
+        )
+        
+        // Cache the result - update state immediately since we're already on MainActor
+        DispatchQueue.main.async {
+            cachedBackgroundView = backgroundView
+            lastBackgroundState = currentState
+        }
+        
+        return backgroundView
     }
     
     private var iconSection: some View {
@@ -239,46 +263,87 @@ struct AppDockItem: View {
     
     // MARK: - Event Handlers
     
+    @State private var mouseTrackingTask: Task<Void, Never>?
+    
     private func handleMouseTracking(_ isInside: Bool) {
-        isHovering = isInside
+        // Cancel any previous tracking task
+        mouseTrackingTask?.cancel()
         
-        // Cancel any pending hide task
-        hidePreviewTask?.cancel()
-        hidePreviewTask = nil
-        
-        if isInside {
-            // Show preview immediately for better responsiveness
-            if app.windowCount > 0 && app.isRunning {
-                showWindowPreview = true
-            }
-        } else {
-            // Create a new hide task with shorter delay for snappier feel
-            let task = DispatchWorkItem {
-                if !self.isHovering {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        self.showWindowPreview = false
+        mouseTrackingTask = Task { @MainActor in
+            // Small delay for debouncing
+            try? await Task.sleep(for: .milliseconds(50))
+            
+            guard !Task.isCancelled else { return }
+            
+            let wasHovering = isHovering
+            isHovering = isInside
+            
+            // Optimization: Only handle hover changes
+            if wasHovering == isInside { return }
+            
+            if isInside {
+                // Cancel any pending hide tasks
+                hidePreviewTask?.cancel()
+                autoHidePreviewTask?.cancel()
+                
+                // Debounce preview showing to prevent excessive updates
+                previewDebounceTask?.cancel()
+                
+                // Show preview for all apps (single window, multiple windows, or not running)
+                let now = Date()
+                let timeSinceLastUpdate = now.timeIntervalSince(lastPreviewUpdate)
+                
+                // Only show preview if enough time has passed since last update
+                if timeSinceLastUpdate >= previewDebounceDelay {
+                    previewDebounceTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(350))
+                        
+                        guard !Task.isCancelled, isHovering else { return }
+                        
+                        lastPreviewUpdate = Date()
+                        showWindowPreview = true
+                    }
+                }
+            } else {
+                // Cancel preview debounce when leaving
+                previewDebounceTask?.cancel()
+                
+                // Create a new hide task with optimized delay
+                hidePreviewTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(150))
+                    
+                    guard !Task.isCancelled, !isHovering else { return }
+                    
+                    withAnimation(.easeOut(duration: 0.1)) {
+                        showWindowPreview = false
                     }
                 }
             }
-            hidePreviewTask = task
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: task)
         }
     }
     
     private func handlePreviewMouseTracking(_ isInside: Bool) {
-        // Cancel any pending hide task when entering preview
         if isInside {
+            // Cancel any pending hide task when entering preview
             hidePreviewTask?.cancel()
             hidePreviewTask = nil
+            // Also cancel auto-hide when mouse is over preview
+            autoHidePreviewTask?.cancel()
+            autoHidePreviewTask = nil
         } else {
-            // Create a new hide task with delay when leaving preview
-            let task = DispatchWorkItem {
-                if !self.isHovering {
-                    self.showWindowPreview = false
+            // Only hide if we're also not hovering over the dock item
+            // Add a delay to prevent flicker when moving between dock item and preview
+            hidePreviewTask = Task { @MainActor in
+                // Increased delay to allow smooth transition between dock item and preview
+                try? await Task.sleep(for: .milliseconds(500))
+                
+                guard !Task.isCancelled, !isHovering else { return }
+                
+                // Double-check both hover states before hiding
+                withAnimation(.easeOut(duration: 0.2)) {
+                    showWindowPreview = false
                 }
             }
-            hidePreviewTask = task
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: task)
         }
     }
     
@@ -295,7 +360,7 @@ struct AppDockItem: View {
             showWindowPreview = true
             return
         }
-        
+
         // If app is not active, activate it (brings windows to front)
         if !app.isActive {
             AppLogger.shared.info("AppDockItem handleTap for \(app.name), not active - activating")

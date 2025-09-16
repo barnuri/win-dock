@@ -189,6 +189,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Separator
         appMenu.addItem(NSMenuItem.separator())
         
+        // Restart item
+        let restartItem = NSMenuItem(title: "Restart Win Dock", action: #selector(restartApp), keyEquivalent: "r")
+        restartItem.keyEquivalentModifierMask = [.command, .shift]
+        restartItem.target = self
+        appMenu.addItem(restartItem)
+        
         // Quit item
         let quitItem = NSMenuItem(title: "Quit Win Dock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quitItem.target = NSApp
@@ -410,6 +416,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         menu.addItem(NSMenuItem.separator())
         
+        // Restart menu item
+        let restartItem = NSMenuItem(title: "Restart Win Dock", action: #selector(restartApp), keyEquivalent: "")
+        restartItem.target = self
+        menu.addItem(restartItem)
+        
         // Quit menu item
         let quitItem = NSMenuItem(title: "Quit Win Dock", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
@@ -527,6 +538,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         AppLogger.shared.showLogsInFinder()
     }
     
+    @objc private func restartApp() {
+        AppLogger.shared.info("Restarting WinDock from menu")
+        restartApplication()
+    }
+    
     @objc private func quitApp() {
         NSApplication.shared.terminate(nil)
     }
@@ -565,6 +581,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+        }
+    }
+    
+    private func restartApplication() {
+        let appPath = Bundle.main.bundlePath
+        let relaunchPath = "/usr/bin/open"
+        
+        // Create a task to relaunch the app
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: relaunchPath)
+        task.arguments = ["-n", appPath]
+        
+        do {
+            try task.run()
+            AppLogger.shared.info("Successfully initiated app restart")
+            // Quit current instance after launching new one
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                NSApplication.shared.terminate(nil)
+            }
+        } catch {
+            AppLogger.shared.error("Failed to restart application: \(error)")
+            // Show error alert to user
+            let alert = NSAlert()
+            alert.messageText = "Restart Failed"
+            alert.informativeText = "Failed to restart WinDock: \(error.localizedDescription)"
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
         }
     }
     

@@ -119,7 +119,7 @@ class DockWindow: NSPanel {
         } else {
             // Show dock when no fullscreen windows, unless manually hidden
             visibilityManager.showAfterFullscreen()
-            AppLogger.shared.info("Dock shown - no fullscreen windows")
+            AppLogger.shared.debug("Dock shown - no fullscreen windows")
         }
     }
     override var canBecomeKey: Bool { false }

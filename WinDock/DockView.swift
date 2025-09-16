@@ -29,18 +29,36 @@ struct DockView: View {
         }
     }
     
-    // Computed property for background material - cached to avoid repeated calculations
+    // Memoized background material - cached to avoid repeated calculations
+    @State private var cachedBackgroundMaterial: AnyShapeStyle?
+    @State private var lastTransparencyValue: Double = -1
+    
     private var backgroundMaterial: some ShapeStyle {
+        // Use cached value if transparency hasn't changed
+        if lastTransparencyValue == taskbarTransparency, let cached = cachedBackgroundMaterial {
+            return cached
+        }
+        
+        // Compute new material
+        let material: AnyShapeStyle
         if taskbarTransparency >= 0.95 {
             // Use glass effect for high transparency
-            return AnyShapeStyle(.regularMaterial)
+            material = AnyShapeStyle(.regularMaterial)
         } else if taskbarTransparency >= 0.7 {
             // Use blurred material for medium transparency
-            return AnyShapeStyle(.thinMaterial)
+            material = AnyShapeStyle(.thinMaterial)
         } else {
             // Use solid color for low transparency
-            return AnyShapeStyle(Color(NSColor.windowBackgroundColor))
+            material = AnyShapeStyle(Color(NSColor.windowBackgroundColor))
         }
+        
+        // Cache the result
+        Task { @MainActor in
+            cachedBackgroundMaterial = material
+            lastTransparencyValue = taskbarTransparency
+        }
+        
+        return material
     }
 
     @ViewBuilder
@@ -160,8 +178,7 @@ struct DockView: View {
     private var dockIconsSection: some View {
         if dockPosition == .bottom || dockPosition == .top {
             HStack(spacing: 2) {
-                ForEach(appManager.dockApps, id: \.id) { app in
-                    let index = appManager.dockApps.firstIndex(where: { $0.id == app.id }) ?? 0
+                ForEach(Array(appManager.dockApps.enumerated()), id: \.element.id) { index, app in
                     HStack(spacing: 0) {
                         // Insertion indicator before the icon
                         Rectangle()
@@ -201,8 +218,7 @@ struct DockView: View {
             }
         } else {
             VStack(spacing: 2) {
-                ForEach(appManager.dockApps, id: \.id) { app in
-                    let index = appManager.dockApps.firstIndex(where: { $0.id == app.id }) ?? 0
+                ForEach(Array(appManager.dockApps.enumerated()), id: \.element.id) { index, app in
                     VStack(spacing: 0) {
                         // Insertion indicator before the icon
                         Rectangle()
