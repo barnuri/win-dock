@@ -11,7 +11,6 @@ struct AppDockItem: View {
     @State private var isDragging = false
     @State private var showWindowPreview = false
     @State private var hidePreviewTask: Task<Void, Never>?
-    @State private var autoHidePreviewTask: Task<Void, Never>?
     @State private var previewDebounceTask: Task<Void, Never>?
     @State private var lastPreviewUpdate: Date = Date()
     private let previewDebounceDelay: TimeInterval = 0.15
@@ -284,7 +283,6 @@ struct AppDockItem: View {
             if isInside {
                 // Cancel any pending hide tasks
                 hidePreviewTask?.cancel()
-                autoHidePreviewTask?.cancel()
                 
                 // Debounce preview showing to prevent excessive updates
                 previewDebounceTask?.cancel()
@@ -310,7 +308,7 @@ struct AppDockItem: View {
                 
                 // Create a new hide task with optimized delay
                 hidePreviewTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(150))
+                    try? await Task.sleep(for: .milliseconds(5000))
                     
                     guard !Task.isCancelled, !isHovering else { return }
                     
@@ -327,15 +325,12 @@ struct AppDockItem: View {
             // Cancel any pending hide task when entering preview
             hidePreviewTask?.cancel()
             hidePreviewTask = nil
-            // Also cancel auto-hide when mouse is over preview
-            autoHidePreviewTask?.cancel()
-            autoHidePreviewTask = nil
         } else {
             // Only hide if we're also not hovering over the dock item
             // Add a delay to prevent flicker when moving between dock item and preview
             hidePreviewTask = Task { @MainActor in
                 // Increased delay to allow smooth transition between dock item and preview
-                try? await Task.sleep(for: .milliseconds(500))
+                try? await Task.sleep(for: .milliseconds(5000))
                 
                 guard !Task.isCancelled, !isHovering else { return }
                 
