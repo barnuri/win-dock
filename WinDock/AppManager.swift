@@ -101,7 +101,11 @@ class AppManager: ObservableObject {
     private var pinnedBundleIdentifiers: Set<String> = []
     private var dockAppOrder: [String] = []
     private var iconCache: [String: NSImage] = [:]
-    private var windowAttributesCache: [CGWindowID: WindowAttributes] = [:] 
+    private var windowAttributesCache: [CGWindowID: WindowAttributes] = [:]
+    
+    // New services for performance optimization
+    private let coordinator = BackgroundTaskCoordinator()
+    private let windowService = WindowEnumerationService() 
 
     // Default pinned applications - Windows 11 style defaults
     private let defaultPinnedApps = [
@@ -118,8 +122,9 @@ class AppManager: ObservableObject {
     init() {
         loadPinnedApps()
         loadDockAppOrder()
-        updateDockApps()
         setupWorkspaceNotifications()
+        // Initial update through coordinator
+        coordinator.scheduleUpdate(reason: "initial_load")
     }
     
     deinit {
@@ -147,6 +152,18 @@ class AppManager: ObservableObject {
     }
 
     private func setupWorkspaceNotifications() {
+        // Listen for PerformDockUpdate notification from coordinator
+        let updateObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("PerformDockUpdate"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateDockApps()
+            }
+        }
+        workspaceNotificationObservers.append(updateObserver)
+        
         // Use workspace notifications instead of polling for better performance
         let workspace = NSWorkspace.shared
         let center = workspace.notificationCenter
@@ -157,8 +174,8 @@ class AppManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.updateDockAppsDebounced()
+            Task { @MainActor in
+                self?.coordinator.scheduleUpdate(reason: "app_launch")
             }
         }
         workspaceNotificationObservers.append(launchObserver)
@@ -168,9 +185,15 @@ class AppManager: ObservableObject {
             forName: NSWorkspace.didTerminateApplicationNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.updateDockAppsDebounced()
+        ) { [weak self] notification in
+            // Invalidate cache for terminated app
+            if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+                Task {
+                    await self?.windowService.invalidateCache(for: app)
+                }
+            }
+            Task { @MainActor in
+                self?.coordinator.scheduleUpdate(reason: "app_terminate")
             }
         }
         workspaceNotificationObservers.append(terminateObserver)
@@ -181,8 +204,8 @@ class AppManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.updateDockAppsDebounced()
+            Task { @MainActor in
+                self?.coordinator.scheduleUpdate(reason: "app_activate")
             }
         }
         workspaceNotificationObservers.append(activateObserver)
@@ -193,8 +216,8 @@ class AppManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.updateDockAppsDebounced()
+            Task { @MainActor in
+                self?.coordinator.scheduleUpdate(reason: "app_hide")
             }
         }
         workspaceNotificationObservers.append(hideObserver)
@@ -204,96 +227,37 @@ class AppManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.updateDockAppsDebounced()
+            Task { @MainActor in
+                self?.coordinator.scheduleUpdate(reason: "app_unhide")
             }
         }
         workspaceNotificationObservers.append(unhideObserver)
     }
     
-    private var updateWorkItem: DispatchWorkItem?
-    private let updateQueue = DispatchQueue(label: "com.windock.appmanager.update", qos: .userInitiated)
-    private var lastUpdateTime: Date = Date.distantPast
-    private let minUpdateInterval: TimeInterval = 0.2 // Minimum 200ms between updates
-    
+    // Debouncing now handled by BackgroundTaskCoordinator
+    // This method kept for backward compatibility but delegates to coordinator
     private func updateDockAppsDebounced() {
-        // Cancel previous update if it hasn't executed yet
-        updateWorkItem?.cancel()
-        
-        // Check if enough time has passed since last update
-        let now = Date()
-        let timeSinceLastUpdate = now.timeIntervalSince(lastUpdateTime)
-        
-        // If too soon, schedule for later
-        let delay = timeSinceLastUpdate < minUpdateInterval ? 
-                   (minUpdateInterval - timeSinceLastUpdate) + 0.05 : 0.05
-        
-        // Create new work item with adaptive delay
-        let workItem = DispatchWorkItem { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                self.lastUpdateTime = Date()
-                await self.updateDockAppsAsync()
-            }
-        }
-        updateWorkItem = workItem
-        
-        // Execute after adaptive delay to prevent update storms
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+        coordinator.scheduleUpdate(reason: "legacy_call")
     }
     
     func startMonitoring() {
-        // Update immediately
-        updateDockApps()
+        // Initial update through coordinator
+        coordinator.scheduleUpdate(reason: "start_monitoring")
         
-        // Use reduced polling frequency as backup (10 seconds)
-        appMonitorTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.updateDockApps()
-            }
-        }
-        
-        // Listen for app launch/quit notifications for immediate updates
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self,
-            selector: #selector(appDidLaunch),
-            name: NSWorkspace.didLaunchApplicationNotification,
-            object: nil
-        )
-        
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self,
-            selector: #selector(appDidTerminate),
-            name: NSWorkspace.didTerminateApplicationNotification,
-            object: nil
-        )
+        // Polling timer removed - rely entirely on notification-based updates
+        // The coordinator handles all debouncing and batching
     }
     
     func stopMonitoring() {
         appMonitorTimer?.invalidate()
         appMonitorTimer = nil
+        coordinator.cancelPendingUpdates()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
     
-    @objc private func appDidLaunch(_ notification: Notification) {
-        // Immediate update for app launches
-        Task { @MainActor [weak self] in
-            self?.updateDockApps()
-        }
-    }
-    
-    @objc private func appDidTerminate(_ notification: Notification) {
-        // Immediate update for app terminations
-        Task { @MainActor [weak self] in
-            self?.updateDockApps()
-        }
-    }
-       
     // Public function to trigger update from outside
     func updateDockAppsIfNeeded() {
-        Task { @MainActor [weak self] in
-            self?.updateDockApps()
-        }
+        coordinator.scheduleUpdate(reason: "external_request")
     }
     
     private func updateDockApps() {
@@ -303,73 +267,70 @@ class AppManager: ObservableObject {
     }
     
     private func updateDockAppsAsync() async {
-        // Move heavy computation to background
-        let newDockApps = await withTaskGroup(of: [DockApp].self) { group in
-            group.addTask { [weak self] in
-                await self?.computeDockApps() ?? []
-            }
-            
-            var result: [DockApp] = []
-            for await apps in group {
-                result = apps
-            }
-            return result
-        }
-        
-        // Update UI on main thread
+        // Compute apps in background, update UI on main thread
+        let newDockApps = await computeDockApps()
         dockApps = newDockApps
     }
     
-    @MainActor
+    // REMOVED @MainActor - this now runs on background thread
     private func computeDockApps() async -> [DockApp] {
-        // Performance: Cache running apps to avoid multiple queries
-        let runningApps = NSWorkspace.shared.runningApplications
-            .filter { app in
-                // Filter out WinDock itself and only show regular apps
-                app.activationPolicy == .regular && 
-                app.bundleIdentifier != winDockBundleID
-            }
-
-        var newDockApps: [DockApp] = []
-        var processedBundleIds: Set<String> = []
-
-        // Use concurrent processing for heavy operations
-        await withTaskGroup(of: DockApp?.self) { group in
-            for app in runningApps {
-                guard let bundleId = app.bundleIdentifier,
-                      !processedBundleIds.contains(bundleId) else { continue }
-
-                processedBundleIds.insert(bundleId)
-                
-                group.addTask { [weak self] in
-                    await self?.createDockApp(for: app, bundleId: bundleId)
-                }
-            }
+        // Capture main actor values before going to background thread
+        let pinnedIds = pinnedBundleIdentifiers
+        let winDockId = winDockBundleID
+        
+        // Move to background thread immediately to avoid blocking UI
+        return await Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return [] }
             
-            for await dockApp in group {
-                if let app = dockApp {
-                    newDockApps.append(app)
+            // Performance: Cache running apps to avoid multiple queries
+            let runningApps = NSWorkspace.shared.runningApplications
+                .filter { app in
+                    // Filter out WinDock itself and only show regular apps
+                    app.activationPolicy == .regular && 
+                    app.bundleIdentifier != winDockId
+                }
+
+            var newDockApps: [DockApp] = []
+            var processedBundleIds: Set<String> = []
+
+            // Use concurrent processing for heavy operations
+            await withTaskGroup(of: DockApp?.self) { group in
+                for app in runningApps {
+                    guard let bundleId = app.bundleIdentifier,
+                          !processedBundleIds.contains(bundleId) else { continue }
+
+                    processedBundleIds.insert(bundleId)
+                    
+                    group.addTask { [weak self] in
+                        await self?.createDockApp(for: app, bundleId: bundleId)
+                    }
+                }
+                
+                for await dockApp in group {
+                    if let app = dockApp {
+                        newDockApps.append(app)
+                    }
                 }
             }
-        }
 
-        // Add pinned apps that aren't running (lightweight operation)
-        for bundleId in pinnedBundleIdentifiers {
-            if !processedBundleIds.contains(bundleId) {
-                if let app = createDockAppForBundleId(bundleId) {
-                    newDockApps.append(app)
+            // Add pinned apps that aren't running (lightweight operation)
+            for bundleId in pinnedIds {
+                if !processedBundleIds.contains(bundleId) {
+                    if let app = await self.createDockAppForBundleIdAsync(bundleId) {
+                        newDockApps.append(app)
+                    }
                 }
             }
-        }
 
-        // Reorder based on saved order
-        reorderApps(&newDockApps)
-        return newDockApps
+            // Reorder based on saved order
+            await self.reorderAppsAsync(&newDockApps)
+            return newDockApps
+        }.value
     }
     
     private func createDockApp(for app: NSRunningApplication, bundleId: String) async -> DockApp? {
-        // Get windows for all running apps to properly show indicators
-        let windows = await getWindowsForAppAsync(app)
+        // Use WindowEnumerationService (async, off main thread)
+        let windows = await windowService.getWindows(for: app)
         let (hasNotifications, notificationCount) = await getNotificationInfoAsync(for: app)
 
         return DockApp(
@@ -390,6 +351,40 @@ class AppManager: ObservableObject {
             apps.sort { lhs, rhs in
                 let lidx = dockAppOrder.firstIndex(of: lhs.bundleIdentifier) ?? Int.max
                 let ridx = dockAppOrder.firstIndex(of: rhs.bundleIdentifier) ?? Int.max
+                if lidx != ridx {
+                    return lidx < ridx
+                }
+                // Fallback: pinned first, then by name
+                if lhs.isPinned && !rhs.isPinned {
+                    return true
+                } else if !lhs.isPinned && rhs.isPinned {
+                    return false
+                } else {
+                    return lhs.name < rhs.name
+                }
+            }
+        } else {
+            // Default ordering: pinned first, then by name
+            apps.sort { lhs, rhs in
+                if lhs.isPinned && !rhs.isPinned {
+                    return true
+                } else if !lhs.isPinned && rhs.isPinned {
+                    return false
+                } else {
+                    return lhs.name < rhs.name
+                }
+            }
+        }
+    }
+    
+    // Async wrapper for reorderApps to access from background thread
+    private func reorderAppsAsync(_ apps: inout [DockApp]) async {
+        let order = dockAppOrder
+        
+        if !order.isEmpty {
+            apps.sort { lhs, rhs in
+                let lidx = order.firstIndex(of: lhs.bundleIdentifier) ?? Int.max
+                let ridx = order.firstIndex(of: rhs.bundleIdentifier) ?? Int.max
                 if lidx != ridx {
                     return lidx < ridx
                 }
@@ -968,6 +963,35 @@ class AppManager: ObservableObject {
             icon: icon,
             url: appURL,
             isPinned: true,
+            runningApplication: nil,
+            windows: [],
+            notificationCount: 0,
+            hasNotifications: false
+        )
+    }
+    
+    // Async wrapper for createDockAppForBundleId to access from background thread
+    private func createDockAppForBundleIdAsync(_ bundleId: String) async -> DockApp? {
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId),
+              let bundle = Bundle(url: appURL) else {
+            return nil
+        }
+        
+        let name = bundle.localizedInfoDictionary?["CFBundleDisplayName"] as? String ??
+                   bundle.infoDictionary?["CFBundleDisplayName"] as? String ??
+                   bundle.infoDictionary?["CFBundleName"] as? String ??
+                   bundleId
+        
+        let icon = NSWorkspace.shared.icon(forFile: appURL.path)
+
+        let isPinned = pinnedBundleIdentifiers.contains(bundleId)
+
+        return DockApp(
+            bundleIdentifier: bundleId,
+            name: name,
+            icon: icon,
+            url: appURL,
+            isPinned: isPinned,
             runningApplication: nil,
             windows: [],
             notificationCount: 0,

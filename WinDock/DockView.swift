@@ -1,6 +1,20 @@
 import SwiftUI
 import AppKit
 
+/// Immutable cache for computed materials - prevents race conditions
+struct MaterialCache: Equatable {
+    let transparency: Double
+    let material: AnyShapeStyle
+    
+    func isValid(for transparency: Double) -> Bool {
+        return self.transparency == transparency
+    }
+    
+    static func == (lhs: MaterialCache, rhs: MaterialCache) -> Bool {
+        return lhs.transparency == rhs.transparency
+    }
+}
+
 struct DockView: View {
     @StateObject private var appManager = AppManager()
     @State private var showingPreview = false
@@ -29,22 +43,23 @@ struct DockView: View {
         }
     }
     
-    // Memoized background material - cached to avoid repeated calculations
-    @State private var cachedBackgroundMaterial: AnyShapeStyle?
-    @State private var lastTransparencyValue: Double = -1
+    // Immutable material cache - no race conditions
+    @State private var cachedMaterial: MaterialCache?
     
     private var backgroundMaterial: some ShapeStyle {
-        // Use cached value if transparency hasn't changed
-        if lastTransparencyValue == taskbarTransparency, let cached = cachedBackgroundMaterial {
-            return cached
+        let currentTransparency = taskbarTransparency
+        
+        // Check cache - synchronous, no race condition
+        if let cache = cachedMaterial, cache.isValid(for: currentTransparency) {
+            return cache.material
         }
         
-        // Compute new material
+        // Compute new material (fast, synchronous operation)
         let material: AnyShapeStyle
-        if taskbarTransparency >= 0.95 {
+        if currentTransparency >= 0.95 {
             // Use glass effect for high transparency
             material = AnyShapeStyle(.regularMaterial)
-        } else if taskbarTransparency >= 0.7 {
+        } else if currentTransparency >= 0.7 {
             // Use blurred material for medium transparency
             material = AnyShapeStyle(.thinMaterial)
         } else {
@@ -52,11 +67,8 @@ struct DockView: View {
             material = AnyShapeStyle(Color(NSColor.windowBackgroundColor))
         }
         
-        // Cache the result
-        Task { @MainActor in
-            cachedBackgroundMaterial = material
-            lastTransparencyValue = taskbarTransparency
-        }
+        // Update cache atomically (value type = thread-safe)
+        cachedMaterial = MaterialCache(transparency: currentTransparency, material: material)
         
         return material
     }
