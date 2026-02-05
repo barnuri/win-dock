@@ -176,14 +176,7 @@ struct DockView: View {
     
     @discardableResult
     private func executeAppleScript(_ script: String) -> Bool {
-        guard let appleScript = NSAppleScript(source: script) else { return false }
-        var error: NSDictionary?
-        _ = appleScript.executeAndReturnError(&error)
-        if let error = error {
-            AppLogger.shared.error("AppleScript error: \(error)")
-            return false
-        }
-        return true
+        return AppLogger.executeAppleScript(script, description: "DockView") != nil
     }
 
     @ViewBuilder

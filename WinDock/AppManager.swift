@@ -1521,10 +1521,7 @@ class AppManager: ObservableObject {
         end tell
         """
         
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-        }
+        AppLogger.executeAppleScript(script, description: "Launch app \(app.name)")
     }
     
     func hideApp(_ app: DockApp) {
