@@ -239,4 +239,34 @@ final class AppLogger {
             try? process.run()
         }
     }
+    
+    // MARK: - AppleScript Execution Helper
+    
+    /// Execute AppleScript with proper error handling and logging
+    /// - Parameters:
+    ///   - source: The AppleScript source code
+    ///   - description: A description of what the script does (for logging)
+    /// - Returns: The result descriptor if successful, nil otherwise
+    @discardableResult
+    static func executeAppleScript(_ source: String, description: String = "AppleScript") -> NSAppleEventDescriptor? {
+        guard let script = NSAppleScript(source: source) else {
+            shared.error("Failed to create AppleScript: \(description)")
+            return nil
+        }
+        
+        var error: NSDictionary?
+        let result = script.executeAndReturnError(&error)
+        
+        if let error = error {
+            // Extract meaningful error information
+            let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? -1
+            let errorMessage = error[NSAppleScript.errorMessage] as? String ?? "Unknown error"
+            let errorBriefMessage = error[NSAppleScript.errorBriefMessage] as? String ?? ""
+            
+            shared.error("AppleScript error (\(description)): #\(errorNumber) - \(errorMessage) \(errorBriefMessage)")
+            return nil
+        }
+        
+        return result
+    }
 }

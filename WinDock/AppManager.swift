@@ -100,7 +100,7 @@ class AppManager: ObservableObject {
     private let dockAppOrderKey = "WinDock.DockAppOrder"
     private var pinnedBundleIdentifiers: Set<String> = []
     private var dockAppOrder: [String] = []
-    private var iconCache: [String: NSImage] = [:]
+    // Note: Icons are cached in DockApp structures, not separately
     private var windowAttributesCache: [CGWindowID: WindowAttributes] = [:]
     
     // New services for performance optimization
@@ -188,11 +188,11 @@ class AppManager: ObservableObject {
         ) { [weak self] notification in
             // Invalidate cache for terminated app
             if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
-                Task {
+                Task { [weak self] in
                     await self?.windowService.invalidateCache(for: app)
                 }
             }
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.coordinator.scheduleUpdate(reason: "app_terminate")
             }
         }
