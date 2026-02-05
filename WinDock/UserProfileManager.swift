@@ -359,19 +359,63 @@ class UserProfileManager: ObservableObject {
     }
     
     private func getDirectoryServicesImage() -> NSImage? {
-        // Try using DirectoryServices framework
-        let script = """
-        do shell script "dscl . -read /Users/\(NSUserName()) JPEGPhoto | tail -1 | xxd -r -p" as string
-        """
+        // SECURITY: Use Process with array arguments instead of shell string interpolation
+        // This prevents command injection if username contains shell metacharacters
         
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            _ = appleScript.executeAndReturnError(&error)
-            if error == nil {
-                // AppleScript approach for getting image data is complex
-                // Skip this approach for now
-                return nil
-            }
+        // First get the raw JPEG photo data using dscl
+        let dsclTask = Process()
+        dsclTask.launchPath = "/usr/bin/dscl"
+        dsclTask.arguments = [".", "-read", "/Users/\(NSUserName())", "JPEGPhoto"]
+        
+        let dsclPipe = Pipe()
+        dsclTask.standardOutput = dsclPipe
+        dsclTask.launch()
+        dsclTask.waitUntilExit()
+        
+        guard dsclTask.terminationStatus == 0 else {
+            return nil
+        }
+        
+        let dsclData = dsclPipe.fileHandleForReading.readDataToEndOfFile()
+        guard let dsclOutput = String(data: dsclData, encoding: .utf8) else {
+            return nil
+        }
+        
+        // Extract the hex string (skip the "JPEGPhoto:" line)
+        let lines = dsclOutput.components(separatedBy: .newlines)
+        guard lines.count > 1 else {
+            return nil
+        }
+        
+        let hexString = lines[1...].joined().trimmingCharacters(in: .whitespaces)
+        
+        // Convert hex string to binary data using xxd
+        let xxdTask = Process()
+        xxdTask.launchPath = "/usr/bin/xxd"
+        xxdTask.arguments = ["-r", "-p"]
+        
+        let xxdInputPipe = Pipe()
+        let xxdOutputPipe = Pipe()
+        xxdTask.standardInput = xxdInputPipe
+        xxdTask.standardOutput = xxdOutputPipe
+        
+        xxdTask.launch()
+        
+        // Write hex string to xxd stdin
+        if let hexData = hexString.data(using: .utf8) {
+            xxdInputPipe.fileHandleForWriting.write(hexData)
+        }
+        xxdInputPipe.fileHandleForWriting.closeFile()
+        
+        xxdTask.waitUntilExit()
+        
+        guard xxdTask.terminationStatus == 0 else {
+            return nil
+        }
+        
+        let imageData = xxdOutputPipe.fileHandleForReading.readDataToEndOfFile()
+        if imageData.count > 0 {
+            return NSImage(data: imageData)
         }
         
         return nil

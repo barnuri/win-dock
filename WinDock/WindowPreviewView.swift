@@ -21,7 +21,14 @@ let CGS_CONNECTION = CGSMainConnectionID()
 extension CGWindowID {
     func screenshot() -> CGImage? {
         var windowId = self
-        let list = CGSHWCaptureWindowList(CGS_CONNECTION, &windowId, 1, [.ignoreGlobalClipShape, .bestResolution, .fullSize]).takeRetainedValue() as! [CGImage]
+        let arrayRef = CGSHWCaptureWindowList(CGS_CONNECTION, &windowId, 1, [.ignoreGlobalClipShape, .bestResolution, .fullSize]).takeRetainedValue()
+        
+        // Safely cast to [CGImage] instead of force unwrap
+        guard let list = arrayRef as? [CGImage] else {
+            AppLogger.shared.error("Failed to cast window capture result to [CGImage]")
+            return nil
+        }
+        
         return list.first
     }
 }
