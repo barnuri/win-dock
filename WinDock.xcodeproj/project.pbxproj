@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1654298B1C534C2488D0F90F /* LaunchAtLoginManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B9CCB3714894FFB958BE893 /* LaunchAtLoginManager.swift */; };
 		A290C7232E2CD6E600E928C3 /* SettingsAccess in Frameworks */ = {isa = PBXBuildFile; productRef = A290C7222E2CD6E600E928C3 /* SettingsAccess */; };
 /* End PBXBuildFile section */
 
@@ -28,6 +29,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		6B9CCB3714894FFB958BE893 /* LaunchAtLoginManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLoginManager.swift; sourceTree = "<group>"; };
 		A25663C62E1B0B3E001A02DB /* WinDock.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WinDock.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A25663D42E1B0B41001A02DB /* WinDockTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WinDockTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A25663DE2E1B0B41001A02DB /* WinDockUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WinDockUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -253,7 +255,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-			);
+							1654298B1C534C2488D0F90F /* LaunchAtLoginManager.swift in Sources */,
+);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		A25663D02E1B0B41001A02DB /* Sources */ = {

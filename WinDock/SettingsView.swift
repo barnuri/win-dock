@@ -1374,17 +1374,41 @@ struct RunOnLoginToggleView: View {
     @State private var isProcessing: Bool = false
     
     var body: some View {
-        HStack {
-            Toggle("Run WinDock on login", isOn: $isEnabled)
-                .disabled(isProcessing)
-                .onChange(of: isEnabled) { _, newValue in
-                    updateLoginItemStatus(enabled: newValue)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Toggle("Run WinDock on login", isOn: $isEnabled)
+                    .disabled(isProcessing || loginItemManager.isProcessing)
+                    .onChange(of: isEnabled) { _, newValue in
+                        updateLoginItemStatus(enabled: newValue)
+                    }
+                
+                if isProcessing || loginItemManager.isProcessing {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .frame(width: 16, height: 16)
                 }
+            }
             
-            if isProcessing {
-                ProgressView()
-                    .scaleEffect(0.7)
-                    .frame(width: 16, height: 16)
+            // Show status message
+            if loginItemManager.requiresApproval {
+                HStack {
+                    Text("⚠️ Requires approval in System Settings")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                    
+                    Button("Open Settings") {
+                        loginItemManager.openSystemSettings()
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
+            }
+            
+            // Show error if any
+            if let error = loginItemManager.lastError {
+                Text("Error: \(error)")
+                    .font(.caption)
+                    .foregroundColor(.red)
             }
         }
         .onAppear {
