@@ -124,7 +124,7 @@ struct DockView: View {
                 .contextMenu {
                     DockContextMenuView(appManager: appManager)
                 }
-            
+
             // Main taskbar content
             HStack(spacing: 0) {
                 // Left side - Start button
