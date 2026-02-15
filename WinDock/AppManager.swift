@@ -225,7 +225,9 @@ class AppManager: ObservableObject {
     
     // New services for performance optimization
     private let coordinator = BackgroundTaskCoordinator()
-    private let windowService = WindowEnumerationService() 
+    private let windowService = WindowEnumerationService()
+    private let badgeService = DockBadgeService()
+    private var badgeRefreshTimer: Timer?
 
     // Default pinned applications - Windows 11 style defaults
     private let defaultPinnedApps = [
@@ -245,12 +247,14 @@ class AppManager: ObservableObject {
         setupWorkspaceNotifications()
         // Initial update through coordinator
         coordinator.scheduleUpdate(reason: "initial_load")
+        startBadgeRefreshTimer()
     }
     
     deinit {
         Task { @MainActor [weak self] in
             self?.stopMonitoring()
         }
+        badgeRefreshTimer?.invalidate()
         workspaceNotificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
         cancellables.removeAll()
     }
@@ -295,6 +299,7 @@ class AppManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                await self?.badgeService.invalidateCache()
                 self?.coordinator.scheduleUpdate(reason: "app_launch")
             }
         }
@@ -306,10 +311,11 @@ class AppManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            // Invalidate cache for terminated app
+            // Invalidate caches for terminated app
             if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
                 Task { [weak self] in
                     await self?.windowService.invalidateCache(for: app)
+                    await self?.badgeService.invalidateCache()
                 }
             }
             Task { @MainActor [weak self] in
@@ -371,8 +377,40 @@ class AppManager: ObservableObject {
     func stopMonitoring() {
         appMonitorTimer?.invalidate()
         appMonitorTimer = nil
+        badgeRefreshTimer?.invalidate()
+        badgeRefreshTimer = nil
         coordinator.cancelPendingUpdates()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    private func startBadgeRefreshTimer() {
+        badgeRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.refreshBadges()
+            }
+        }
+    }
+
+    /// Lightweight badge-only update — reads Dock.app's AX tree and updates
+    /// only the notificationCount/hasNotifications fields on existing dockApps.
+    /// Does NOT re-enumerate windows or trigger a full dock update.
+    private func refreshBadges() async {
+        let badges = await badgeService.getBadges()
+
+        var changed = false
+        for i in dockApps.indices {
+            let newCount = badges[dockApps[i].bundleIdentifier] ?? 0
+            let newHas = newCount > 0
+            if dockApps[i].notificationCount != newCount || dockApps[i].hasNotifications != newHas {
+                dockApps[i].notificationCount = newCount
+                dockApps[i].hasNotifications = newHas
+                changed = true
+            }
+        }
+
+        if changed {
+            AppLogger.shared.debug("Badge refresh: updated badges for \(badges.count) apps")
+        }
     }
     
     // Public function to trigger update from outside
@@ -1451,386 +1489,11 @@ class AppManager: ObservableObject {
         UserDefaults.standard.set(Array(pinnedBundleIdentifiers), forKey: pinnedAppsKey)
     }
     
-    private func getNotificationInfo(for app: NSRunningApplication) -> (hasNotifications: Bool, notificationCount: Int) {
-        // Sync wrapper for backward compatibility
-        var result: (hasNotifications: Bool, notificationCount: Int) = (false, 0)
-        let semaphore = DispatchSemaphore(value: 0)
-        
-        Task {
-            result = await getNotificationInfoAsync(for: app)
-            semaphore.signal()
-        }
-        
-        semaphore.wait()
-        return result
-    }
-    
     private func getNotificationInfoAsync(for app: NSRunningApplication) async -> (hasNotifications: Bool, notificationCount: Int) {
         guard let bundleIdentifier = app.bundleIdentifier else {
             return (false, 0)
         }
-        
-        // Try to get real notification count from various sources
-        let notificationCount = getRealNotificationCount(for: bundleIdentifier)
-        
-        // Known apps that commonly show notifications
-        let notificationCapableApps: Set<String> = [
-            "com.apple.mail",
-            "com.apple.Messages", 
-            "com.slack.client",
-            "com.tinyspeck.slackmacgap",
-            "com.microsoft.teams",
-            "com.microsoft.teams2", // Teams 2.0
-            "com.discord.discord",
-            "com.apple.facetime",
-            "com.whatsapp.WhatsApp",
-            "com.telegram.desktop",
-            "org.signal.Signal",
-            "com.spotify.client",
-            "com.apple.AppStore",
-            "com.apple.systempreferences",
-            "com.apple.Console"
-        ]
-        
-        // Show notifications for known notification-capable apps
-        let hasNotifications = notificationCapableApps.contains(bundleIdentifier) && notificationCount > 0
-        
-        // Debug logging for Teams specifically
-        if bundleIdentifier == "com.microsoft.teams" || bundleIdentifier == "com.microsoft.teams2" {
-            AppLogger.shared.debug("Teams notification check: count=\(notificationCount), hasNotifications=\(hasNotifications)")
-        }
-        
-        return (hasNotifications, notificationCount)
-    }
-    
-    private func getRealNotificationCount(for bundleIdentifier: String) -> Int {
-        // Try multiple methods to get real notification count
-        
-        // Method 1: Check app badge count (requires accessibility permissions)
-        if let count = getAppBadgeCount(bundleIdentifier: bundleIdentifier) {
-            return count
-        }
-        
-        // Method 2: Check notification center (simplified approach)
-        let notificationCount = getNotificationCenterCount(for: bundleIdentifier)
-        if notificationCount > 0 {
-            return notificationCount
-        }
-        
-        // Method 3: Check specific app states
-        switch bundleIdentifier {
-        case "com.apple.mail":
-            return getMailNotificationCount()
-        case "com.apple.Messages":
-            return getMessagesNotificationCount()
-        case "com.slack.client", "com.tinyspeck.slackmacgap":
-            return getSlackNotificationCount()
-        case "com.microsoft.teams", "com.microsoft.teams2":
-            return getTeamsNotificationCount()
-        case "com.apple.AppStore":
-            return getAppStoreNotificationCount()
-        default:
-            // For other apps, try to detect if they have pending notifications
-            return getGenericNotificationCount(for: bundleIdentifier)
-        }
-    }
-    
-    private func getAppBadgeCount(bundleIdentifier: String) -> Int? {
-        // Try to read badge count from running application
-        let runningApps = NSWorkspace.shared.runningApplications
-        guard runningApps.first(where: { $0.bundleIdentifier == bundleIdentifier }) != nil else {
-            return nil
-        }
-        
-        // This is limited without private APIs, but we can try accessibility
-        // This is a placeholder for potential future enhancement
-        return nil
-    }
-    
-    private func getNotificationCenterCount(for bundleIdentifier: String) -> Int {
-        // Check for pending notifications (simplified approach)
-        // This would require notification center integration which is complex
-        // For now return 0, but this is where real notification integration would go
-        return 0
-    }
-    
-    private func getMailNotificationCount() -> Int {
-        // Try to get unread mail count via AppleScript
-        let script = """
-        tell application "Mail"
-            try
-                set unreadCount to unread count of inbox
-                return unreadCount
-            on error
-                return 0
-            end try
-        end tell
-        """
-        
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            let result = appleScript.executeAndReturnError(&error)
-            if error == nil {
-                return result.int32Value > 0 ? Int(result.int32Value) : 0
-            }
-        }
-        
-        return 0
-    }
-    
-    private func getMessagesNotificationCount() -> Int {
-        // Try to get unread messages count via AppleScript
-        let script = """
-        tell application "Messages"
-            try
-                set unreadCount to 0
-                repeat with theChat in chats
-                    set unreadCount to unreadCount + (unread count of theChat)
-                end repeat
-                return unreadCount
-            on error
-                return 0
-            end try
-        end tell
-        """
-        
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            let result = appleScript.executeAndReturnError(&error)
-            if error == nil {
-                return result.int32Value > 0 ? Int(result.int32Value) : 0
-            }
-        }
-        
-        return 0
-    }
-    
-    private func getSlackNotificationCount() -> Int {
-        // Try to get Slack notification count
-        let script = """
-        tell application "System Events"
-            try
-                tell process "Slack"
-                    set badgeText to value of attribute "AXTitle" of first application whose bundle identifier is "com.slack.client"
-                    if badgeText contains "(" then
-                        set AppleScript's text item delimiters to "("
-                        set badgeNumber to text item 2 of badgeText
-                        set AppleScript's text item delimiters to ")"
-                        set badgeNumber to text item 1 of badgeNumber
-                        return badgeNumber as integer
-                    end if
-                end tell
-            on error
-                return 0
-            end try
-        end tell
-        """
-        
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            let result = appleScript.executeAndReturnError(&error)
-            if error == nil {
-                return result.int32Value > 0 ? Int(result.int32Value) : 0
-            }
-        }
-        
-        return 0
-    }
-    
-    private func getTeamsNotificationCount() -> Int {
-        AppLogger.shared.debug("Getting Teams notification count...")
-        
-        // First, try to find the Teams app
-        let teamsRunningApps = NSWorkspace.shared.runningApplications.filter { app in
-            app.bundleIdentifier == "com.microsoft.teams2" || 
-            app.bundleIdentifier == "com.microsoft.teams" ||
-            app.localizedName?.lowercased().contains("teams") == true
-        }
-        
-        guard !teamsRunningApps.isEmpty else {
-            AppLogger.shared.debug("Teams is not running")
-            return 0
-        }
-        
-        // Method 1: Check window list via Core Graphics (no AppleScript needed)
-        if let count = getTeamsNotificationCountViaWindowList() {
-            AppLogger.shared.debug("Teams notification count via window list: \(count)")
-            return count
-        }
-        
-        // Method 2: Fallback to AppleScript with better error handling
-        let script = """
-        tell application "System Events"
-            try
-                tell process "Microsoft Teams"
-                    if exists window 1 then
-                        set windowTitle to title of window 1
-                        log "Teams window title: " & windowTitle
-                        
-                        -- Look for patterns like "Microsoft Teams (2)" or "Teams (5)"
-                        if windowTitle contains "(" and windowTitle contains ")" then
-                            set AppleScript's text item delimiters to "("
-                            set titleParts to text items of windowTitle
-                            if (count of titleParts) > 1 then
-                                set badgePart to text item 2 of titleParts
-                                set AppleScript's text item delimiters to ")"
-                                set badgeNum to text item 1 of badgePart
-                                set AppleScript's text item delimiters to ""
-                                try
-                                    set notificationCount to badgeNum as integer
-                                    if notificationCount > 0 then
-                                        log "Found Teams notifications: " & (notificationCount as string)
-                                        return notificationCount
-                                    end if
-                                on error
-                                    log "Error parsing badge number: " & badgeNum
-                                end try
-                            end if
-                        end if
-                        
-                        -- Look for other notification indicators in title
-                        if windowTitle contains "notification" or windowTitle contains "unread" or windowTitle contains "message" then
-                            log "Found Teams notification indicator in title"
-                            return 1
-                        end if
-                        
-                        return 0
-                    else
-                        log "No Teams window found"
-                        return 0
-                    end if
-                end tell
-            on error errMsg
-                log "Teams notification check error: " & errMsg
-                return 0
-            end try
-        end tell
-        """
-        
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            let result = appleScript.executeAndReturnError(&error)
-            
-            if let error = error {
-                let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? 0
-                
-                if errorNumber == -1743 {
-                    AppLogger.shared.warning("Teams AppleScript authorization required - user needs to grant permission in System Preferences > Security & Privacy > Privacy > Automation")
-                } else {
-                    AppLogger.shared.error("Teams AppleScript error: \(error)")
-                }
-                return 0
-            }
-            
-            let count = Int(result.int32Value)
-            AppLogger.shared.debug("Teams notification count from AppleScript: \(count)")
-            return count > 0 ? count : 0
-        }
-        
-        AppLogger.shared.debug("Teams notification count: 0 (no script result)")
-        return 0
-    }
-    
-    private func getTeamsNotificationCountViaWindowList() -> Int? {
-        // Get window list for Teams via Core Graphics API
-        guard let windowList = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] else {
-            return nil
-        }
-        
-        for windowInfo in windowList {
-            guard let ownerName = windowInfo[kCGWindowOwnerName as String] as? String,
-                  ownerName.lowercased().contains("teams") else { continue }
-            
-            guard let windowTitle = windowInfo[kCGWindowName as String] as? String,
-                  !windowTitle.isEmpty else { continue }
-            
-            // Look for notification patterns in window title
-            if windowTitle.contains("(") && windowTitle.contains(")") {
-                // Extract number from parentheses
-                let components = windowTitle.components(separatedBy: "(")
-                if components.count > 1 {
-                    let badgePart = components[1]
-                    let badgeComponents = badgePart.components(separatedBy: ")")
-                    if let badgeString = badgeComponents.first,
-                       let badgeCount = Int(badgeString.trimmingCharacters(in: .whitespaces)) {
-                        AppLogger.shared.debug("Found Teams notification count in window title: \(badgeCount)")
-                        return badgeCount
-                    }
-                }
-            }
-            
-            // Look for other notification indicators
-            if windowTitle.lowercased().contains("notification") ||
-               windowTitle.lowercased().contains("unread") ||
-               windowTitle.lowercased().contains("message") {
-                AppLogger.shared.debug("Found Teams notification indicator in window title")
-                return 1
-            }
-        }
-        
-        return 0
-    }
-    
-    private func getAppStoreNotificationCount() -> Int {
-        // App Store shows update badges
-        let script = """
-        tell application "System Events"
-            try
-                tell process "App Store"
-                    set badgeValue to value of attribute "AXStatusLabel" of first application whose bundle identifier is "com.apple.AppStore"
-                    if badgeValue is not missing value then
-                        return badgeValue as integer
-                    end if
-                end tell
-            on error
-                return 0
-            end try
-        end tell
-        """
-        
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            let result = appleScript.executeAndReturnError(&error)
-            if error == nil {
-                return result.int32Value > 0 ? Int(result.int32Value) : 0
-            }
-        }
-        
-        return 0
-    }
-    
-    private func getGenericNotificationCount(for bundleIdentifier: String) -> Int {
-        // Check if the app has any pending notifications in the notification center
-        // This is a simplified check - in a real implementation, you'd use private APIs
-        // or notification center integrations
-        
-        // For testing: check if debug mode is enabled for notifications
-        let debugMode = UserDefaults.standard.bool(forKey: "debugNotifications")
-        
-        // For apps that commonly show notifications, simulate occasional notifications
-        let commonNotificationApps: Set<String> = [
-            "com.discord.discord",
-            "com.whatsapp.WhatsApp",
-            "com.telegram.desktop",
-            "org.signal.Signal",
-            "com.spotify.client"
-        ]
-        
-        // Debug mode: simulate Teams notifications for testing
-        if debugMode && (bundleIdentifier == "com.microsoft.teams" || bundleIdentifier == "com.microsoft.teams2") {
-            let simulatedCount = Int.random(in: 1...9)
-            AppLogger.shared.debug("Debug mode: simulating \(simulatedCount) Teams notifications")
-            return simulatedCount
-        }
-        
-        if commonNotificationApps.contains(bundleIdentifier) {
-            // Simulate realistic notification patterns
-            let chance = Double.random(in: 0...1)
-            if chance < 0.15 { // 15% chance of having notifications
-                return Int.random(in: 1...5)
-            }
-        }
-        
-        return 0
+        let count = await badgeService.getBadgeCount(for: bundleIdentifier)
+        return (count > 0, count)
     }
 }
