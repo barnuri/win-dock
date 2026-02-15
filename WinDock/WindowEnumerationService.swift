@@ -308,6 +308,10 @@ actor WindowEnumerationService {
         let result = AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &positionRef)
         
         if result == .success, let axValue = positionRef {
+            // Safely cast to AXValue instead of force unwrap
+            guard CFGetTypeID(axValue) == AXValueGetTypeID() else {
+                return nil
+            }
             var point = CGPoint.zero
             if AXValueGetValue(axValue as! AXValue, .cgPoint, &point) {
                 return point
@@ -321,6 +325,10 @@ actor WindowEnumerationService {
         let result = AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &sizeRef)
         
         if result == .success, let axValue = sizeRef {
+            // Safely cast to AXValue instead of force unwrap
+            guard CFGetTypeID(axValue) == AXValueGetTypeID() else {
+                return nil
+            }
             var size = CGSize.zero
             if AXValueGetValue(axValue as! AXValue, .cgSize, &size) {
                 return size

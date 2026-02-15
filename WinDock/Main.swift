@@ -80,6 +80,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             BackgroundUpdateManager.shared.startBackgroundUpdates()
         }
         
+        // Initialize LoginItemManager to ensure launch-at-login is registered
+        // on first launch (the singleton sets it up in its init)
+        _ = LoginItemManager.shared
+
         // Initialize NotificationPositionManager to start background monitoring
         // This ensures notification positioning works immediately when app launches,
         // not just when settings page is opened

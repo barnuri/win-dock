@@ -113,6 +113,7 @@ class NotificationPositionManager: NSObject, ObservableObject {
         
         axObserver = observer
 
+        // Safe to use passUnretained since NotificationPositionManager is a singleton that never deallocates
         let selfPtr: UnsafeMutableRawPointer = Unmanaged.passUnretained(self).toOpaque()
         let addNotificationResult = AXObserverAddNotification(observer, app, kAXWindowCreatedNotification as CFString, selfPtr)
         
@@ -127,8 +128,9 @@ class NotificationPositionManager: NSObject, ObservableObject {
         lastError = nil
         debugLog("Observer setup complete for Notification Center (PID: \(pid))")
 
-        widgetMonitorTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            self.checkForWidgetChanges()
+        // Use weak self to prevent retain cycle
+        widgetMonitorTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.checkForWidgetChanges()
         }
         
         // Move any existing notifications
@@ -367,9 +369,16 @@ class NotificationPositionManager: NSObject, ObservableObject {
     private func getPosition(of element: AXUIElement) -> CGPoint? {
         var positionValue: AnyObject?
         AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue)
-        guard let posVal: AnyObject = positionValue, AXValueGetType(posVal as! AXValue) == .cgPoint else {
+        guard let posVal: AnyObject = positionValue else {
             return nil
         }
+        
+        // Safely check type before casting
+        guard CFGetTypeID(posVal) == AXValueGetTypeID(),
+              AXValueGetType(posVal as! AXValue) == .cgPoint else {
+            return nil
+        }
+        
         var position = CGPoint.zero
         AXValueGetValue(posVal as! AXValue, .cgPoint, &position)
         return position
@@ -378,9 +387,16 @@ class NotificationPositionManager: NSObject, ObservableObject {
     private func getSize(of element: AXUIElement) -> CGSize? {
         var sizeValue: AnyObject?
         AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue)
-        guard let sizeVal: AnyObject = sizeValue, AXValueGetType(sizeVal as! AXValue) == .cgSize else {
+        guard let sizeVal: AnyObject = sizeValue else {
             return nil
         }
+        
+        // Safely check type before casting
+        guard CFGetTypeID(sizeVal) == AXValueGetTypeID(),
+              AXValueGetType(sizeVal as! AXValue) == .cgSize else {
+            return nil
+        }
+        
         var size = CGSize.zero
         AXValueGetValue(sizeVal as! AXValue, .cgSize, &size)
         return size
@@ -388,7 +404,10 @@ class NotificationPositionManager: NSObject, ObservableObject {
 
     private func setPosition(_ element: AXUIElement, x: CGFloat, y: CGFloat) {
         var point = CGPoint(x: x, y: y)
-        let value: AXValue = AXValueCreate(.cgPoint, &point)!
+        guard let value = AXValueCreate(.cgPoint, &point) else {
+            debugLog("Failed to create AXValue for position")
+            return
+        }
         AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value)
     }
 

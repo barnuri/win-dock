@@ -1371,20 +1371,43 @@ struct BackupSettingsTab: View {
 struct RunOnLoginToggleView: View {
     @StateObject private var loginItemManager = LoginItemManager.shared
     @State private var isEnabled: Bool = false
-    @State private var isProcessing: Bool = false
-    
+
     var body: some View {
-        HStack {
-            Toggle("Run WinDock on login", isOn: $isEnabled)
-                .disabled(isProcessing)
-                .onChange(of: isEnabled) { _, newValue in
-                    updateLoginItemStatus(enabled: newValue)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Toggle("Run WinDock on login", isOn: $isEnabled)
+                    .disabled(loginItemManager.isProcessing)
+                    .onChange(of: isEnabled) { _, newValue in
+                        updateLoginItemStatus(enabled: newValue)
+                    }
+
+                if loginItemManager.isProcessing {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .frame(width: 16, height: 16)
                 }
+            }
             
-            if isProcessing {
-                ProgressView()
-                    .scaleEffect(0.7)
-                    .frame(width: 16, height: 16)
+            // Show status message
+            if loginItemManager.requiresApproval {
+                HStack {
+                    Text("⚠️ Requires approval in System Settings")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                    
+                    Button("Open Settings") {
+                        loginItemManager.openSystemSettings()
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
+            }
+            
+            // Show error if any
+            if let error = loginItemManager.lastError {
+                Text("Error: \(error)")
+                    .font(.caption)
+                    .foregroundColor(.red)
             }
         }
         .onAppear {
@@ -1393,21 +1416,13 @@ struct RunOnLoginToggleView: View {
     }
     
     private func updateLoginItemStatus(enabled: Bool) {
-        isProcessing = true
-        
-        // Perform the login item change on a background queue
-        DispatchQueue.global(qos: .userInitiated).async {
-            loginItemManager.isLoginItemEnabled = enabled
-            
-            DispatchQueue.main.async {
-                isProcessing = false
-                // Verify the change took effect
-                let actualStatus = loginItemManager.isLoginItemEnabled
-                if actualStatus != enabled {
-                    // Revert UI if the change failed
-                    isEnabled = actualStatus
-                }
-            }
+        loginItemManager.isLoginItemEnabled = enabled
+
+        // Verify the change took effect
+        let actualStatus = loginItemManager.isLoginItemEnabled
+        if actualStatus != enabled {
+            // Revert UI if the change failed
+            isEnabled = actualStatus
         }
     }
 }

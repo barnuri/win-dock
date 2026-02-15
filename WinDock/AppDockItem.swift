@@ -19,8 +19,8 @@ struct AppDockItem: View {
         iconSize * 0.7 
     }
     
-    private var totalHeight: CGFloat { 
-        showLabels ? 78 : 60 
+    private var totalHeight: CGFloat {
+        showLabels ? 78 : 54
     }
 
     var body: some View {
@@ -172,7 +172,7 @@ struct AppDockItem: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.5)
                 }
-                .offset(x: 2, y: -2)
+                .offset(x: 4, y: 4)
             }
             Spacer()
         }
