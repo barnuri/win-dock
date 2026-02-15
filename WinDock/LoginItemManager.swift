@@ -45,36 +45,47 @@ class LoginItemManager: ObservableObject {
     }
     
     private func setLoginItemStatus(enabled: Bool) {
+        // Must be called from main thread since we modify @Published properties
+        assert(Thread.isMainThread, "setLoginItemStatus must be called from the main thread")
+
         lastError = nil
-        
+        isProcessing = true
+
         if #available(macOS 13.0, *) {
             do {
                 let service = SMAppService.mainApp
-                
+
                 if enabled {
                     // If already enabled, no need to register again
                     if service.status == .enabled {
                         AppLogger.shared.debug("Login item already enabled")
+                        isProcessing = false
                         return
                     }
-                    
+
                     try service.register()
                     AppLogger.shared.info("Successfully registered WinDock as login item")
+                    isProcessing = false
                 } else {
                     // If already disabled, no need to unregister
                     if service.status == .notRegistered {
                         AppLogger.shared.debug("Login item already disabled")
+                        isProcessing = false
                         return
                     }
-                    
+
                     // Note: unregister is async on macOS 13+
                     Task {
                         do {
                             try await service.unregister()
+                            await MainActor.run {
+                                self.isProcessing = false
+                            }
                             AppLogger.shared.info("Successfully unregistered WinDock from login items")
                         } catch {
                             await MainActor.run {
-                                lastError = "Failed to unregister: \(error.localizedDescription)"
+                                self.lastError = "Failed to unregister: \(error.localizedDescription)"
+                                self.isProcessing = false
                             }
                             AppLogger.shared.error("Failed to unregister from login items: \(error.localizedDescription)")
                         }
@@ -82,11 +93,13 @@ class LoginItemManager: ObservableObject {
                 }
             } catch {
                 lastError = "Failed to update login item: \(error.localizedDescription)"
+                isProcessing = false
                 AppLogger.shared.error("Failed to update login item status: \(error.localizedDescription)")
             }
         } else {
             // Fallback for older macOS versions
             legacySetLoginItemStatus(enabled: enabled)
+            isProcessing = false
         }
     }
     
