@@ -14,8 +14,128 @@ func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePoin
 @_silgen_name("_AXUIElementCreateWithRemoteToken")
 func _AXUIElementCreateWithRemoteToken(_ token: CFData) -> Unmanaged<AXUIElement>?
 
+// SkyLight private APIs for window focusing (same approach as alt-tab-macos)
+@_silgen_name("_SLPSSetFrontProcessWithOptions") @discardableResult
+func _SLPSSetFrontProcessWithOptions(_ psn: UnsafeMutablePointer<ProcessSerialNumber>, _ wid: CGWindowID, _ mode: UInt32) -> CGError
+
+@_silgen_name("SLPSPostEventRecordTo") @discardableResult
+func SLPSPostEventRecordTo(_ psn: UnsafeMutablePointer<ProcessSerialNumber>, _ bytes: UnsafeMutablePointer<UInt8>) -> CGError
+
+// GetProcessForPID is deprecated and unavailable in Swift, but still works at runtime
+@_silgen_name("GetProcessForPID") @discardableResult
+func getProcessForPID(_ pid: pid_t, _ psn: UnsafeMutablePointer<ProcessSerialNumber>) -> OSStatus
+
+enum SLPSMode: UInt32 {
+    case allWindows = 0x100
+    case userGenerated = 0x200
+    case noWindows = 0x400
+}
+
 // Missing AX attribute constants
 let kAXFullscreenAttribute = "AXFullScreen" as CFString
+
+// MARK: - Window Focus Helpers (Private API approach, like alt-tab-macos)
+// These replace AppleScript-based activation to avoid "Choose Application" popups
+
+/// Focus a window using private macOS APIs
+private func focusWindowWithPrivateAPIs(windowID: CGWindowID, pid: pid_t) {
+    var psn = ProcessSerialNumber()
+    getProcessForPID(pid, &psn)
+    _SLPSSetFrontProcessWithOptions(&psn, windowID, SLPSMode.userGenerated.rawValue)
+    makeWindowKey(windowID: windowID, psn: &psn)
+    raiseWindowViaAX(windowID: windowID, pid: pid)
+}
+
+/// Make a window the key window using SLPSPostEventRecordTo
+/// Ported from https://github.com/Hammerspoon/hammerspoon/issues/370#issuecomment-545545468
+private func makeWindowKey(windowID: CGWindowID, psn: inout ProcessSerialNumber) {
+    var bytes = [UInt8](repeating: 0, count: 0xf8)
+    bytes[0x04] = 0xf8
+    bytes[0x3a] = 0x10
+    var wid = windowID
+    memcpy(&bytes[0x3c], &wid, MemoryLayout<UInt32>.size)
+    memset(&bytes[0x20], 0xff, 0x10)
+    bytes[0x08] = 0x01
+    SLPSPostEventRecordTo(&psn, &bytes)
+    bytes[0x08] = 0x02
+    SLPSPostEventRecordTo(&psn, &bytes)
+}
+
+/// Raise a window using AXUIElement kAXRaiseAction
+private func raiseWindowViaAX(windowID: CGWindowID, pid: pid_t) {
+    let axApp = AXUIElementCreateApplication(pid)
+    var windowElements: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowElements) == .success,
+          let windows = windowElements as? [AXUIElement] else { return }
+    for window in windows {
+        var wid: CGWindowID = 0
+        if _AXUIElementGetWindow(window, &wid) == .success, wid == windowID {
+            AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+            break
+        }
+    }
+}
+
+/// Unminimize a specific window by ID using AX API
+private func unminimizeWindowByID(_ windowID: CGWindowID, pid: pid_t) {
+    let axApp = AXUIElementCreateApplication(pid)
+    var windowElements: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowElements) == .success,
+          let windows = windowElements as? [AXUIElement] else { return }
+    for window in windows {
+        var wid: CGWindowID = 0
+        if _AXUIElementGetWindow(window, &wid) == .success, wid == windowID {
+            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, false as CFTypeRef)
+            break
+        }
+    }
+}
+
+/// Unminimize all windows for an app using AX API
+private func unminimizeAllWindowsAX(pid: pid_t) {
+    let axApp = AXUIElementCreateApplication(pid)
+    var windowElements: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowElements) == .success,
+          let windows = windowElements as? [AXUIElement] else { return }
+    for window in windows {
+        var isMinimized: CFTypeRef?
+        if AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &isMinimized) == .success,
+           let minimized = isMinimized as? Bool, minimized {
+            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, false as CFTypeRef)
+        }
+    }
+}
+
+/// Get the frontmost window ID for an app using AX API
+private func getFrontWindowID(pid: pid_t) -> CGWindowID? {
+    let axApp = AXUIElementCreateApplication(pid)
+    var windowElements: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowElements) == .success,
+          let windows = windowElements as? [AXUIElement], !windows.isEmpty else { return nil }
+    var wid: CGWindowID = 0
+    if _AXUIElementGetWindow(windows[0], &wid) == .success, wid > 0 {
+        return wid
+    }
+    return nil
+}
+
+/// Close a window using AX API close button
+private func closeWindowViaAX(windowID: CGWindowID, pid: pid_t) -> Bool {
+    let axApp = AXUIElementCreateApplication(pid)
+    var windowElements: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowElements) == .success,
+          let windows = windowElements as? [AXUIElement] else { return false }
+    for window in windows {
+        var wid: CGWindowID = 0
+        if _AXUIElementGetWindow(window, &wid) == .success, wid == windowID {
+            var closeButton: CFTypeRef?
+            if AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &closeButton) == .success {
+                return AXUIElementPerformAction(closeButton as! AXUIElement, kAXPressAction as CFString) == .success
+            }
+        }
+    }
+    return false
+}
 
 // Window attributes structure to hold AX API results
 struct WindowAttributes {
@@ -1027,211 +1147,31 @@ class AppManager: ObservableObject {
     // MARK: - App Actions
 
     func focusWindow(windowID: CGWindowID, app: DockApp) {
-        guard let runningApp = app.runningApplication else { 
+        guard let runningApp = app.runningApplication else {
             AppLogger.shared.warning("Cannot focus window: app is not running")
-            return 
+            return
         }
-        
+
         AppLogger.shared.info("Focusing window \(windowID) for app \(app.name)")
-        
-        // Comprehensive activation sequence to ensure window is visible and focused
+        let pid = runningApp.processIdentifier
+
         // Step 1: Unhide the app if hidden
         if runningApp.isHidden {
-            let unhideSuccess = runningApp.unhide()
-            AppLogger.shared.info("Unhide result: \(unhideSuccess)")
+            runningApp.unhide()
         }
-        
-        // Step 2: Check if specific window is minimized and unminimize it
+
+        // Step 2: Focus using private APIs on background queue (no AppleScript)
         if windowID > 0 {
-            if let windowList = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]],
-               let windowInfo = windowList.first {
-                let isMinimized = !(windowInfo[kCGWindowIsOnscreen as String] as? Bool ?? true)
-                if isMinimized {
-                    AppLogger.shared.info("Window \(windowID) is minimized, unminimizing...")
-                    // Use AXUIElement to unminimize the specific window
-                    let axWindow = AXUIElementCreateApplication(runningApp.processIdentifier)
-                    var windowElements: CFTypeRef?
-                    if AXUIElementCopyAttributeValue(axWindow, kAXWindowsAttribute as CFString, &windowElements) == .success,
-                       let windows = windowElements as? [AXUIElement] {
-                        for window in windows {
-                            var windowIDValue: CGWindowID = 0
-                            var idRef: CFTypeRef?
-                            if AXUIElementCopyAttributeValue(window, "_AXWindowNumber" as CFString, &idRef) == .success,
-                               let id = idRef as? Int {
-                                windowIDValue = CGWindowID(id)
-                                if windowIDValue == windowID {
-                                    AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, false as CFTypeRef)
-                                    AppLogger.shared.info("Unminimized window \(windowID) using AXUIElement")
-                                    break
-                                }
-                            }
-                        }
-                    }
-                }
+            DispatchQueue.global(qos: .userInitiated).async {
+                unminimizeWindowByID(windowID, pid: pid)
+                focusWindowWithPrivateAPIs(windowID: windowID, pid: pid)
             }
-        }
-        
-        // Step 3: Activate the app with all windows
-        var activateSuccess = false
-        if #available(macOS 14.0, *) {
-            activateSuccess = runningApp.activate()
         } else {
-            activateSuccess = runningApp.activate(options: [.activateAllWindows])
-        }
-        AppLogger.shared.info("Activate result: \(activateSuccess)")
-        
-        // Step 4: Use AppleScript for more reliable window focusing
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            // Unminimize all windows first
-            self.unminimizeAllWindows(for: app, runningApp: runningApp)
-            
-            // Then focus the specific window or bring app to front
-            if windowID > 0 {
-                self.focusSpecificWindow(windowID: windowID, app: app, runningApp: runningApp)
+            // No specific window, just activate the app
+            if #available(macOS 14.0, *) {
+                runningApp.activate()
             } else {
-                self.ensureAppIsFrontmost(app: app, runningApp: runningApp)
-            }
-        }
-    }
-    
-    private func unminimizeAllWindows(for app: DockApp, runningApp: NSRunningApplication) {
-        let script = """
-        tell application "\(app.name)"
-            try
-                set miniaturized of every window to false
-            end try
-        end tell
-        """
-        
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-            if error != nil {
-                AppLogger.shared.warning("Failed to unminimize windows for \(app.name)")
-            } else {
-                AppLogger.shared.info("Unminimized windows for \(app.name)")
-            }
-        }
-    }
-    
-    private func focusSpecificWindow(windowID: CGWindowID, app: DockApp, runningApp: NSRunningApplication) {
-        // Try to get window information
-        guard let windowList = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]],
-              let windowInfo = windowList.first else {
-            AppLogger.shared.warning("Could not find window with ID \(windowID)")
-            self.ensureAppIsFrontmost(app: app, runningApp: runningApp)
-            return
-        }
-        
-        // Verify window belongs to the app
-        guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
-              ownerPID == runningApp.processIdentifier else {
-            AppLogger.shared.warning("Window \(windowID) does not belong to app \(app.name)")
-            self.ensureAppIsFrontmost(app: app, runningApp: runningApp)
-            return
-        }
-        
-        let windowName = windowInfo[kCGWindowName as String] as? String ?? ""
-        let isMinimized = !(windowInfo[kCGWindowIsOnscreen as String] as? Bool ?? true)
-        
-        AppLogger.shared.info("Focusing window '\(windowName)', minimized: \(isMinimized)")
-        
-        // Approach 1: Try direct app-level window management first
-        if !windowName.isEmpty {
-            let appScript = """
-            tell application "\(app.name)"
-                activate
-                try
-                    -- First restore if minimized
-                    if (count of windows) > 0 then
-                        repeat with w in windows
-                            if name of w is "\(windowName)" then
-                                set miniaturized of w to false
-                                set index of w to 1
-                                exit repeat
-                            end if
-                        end repeat
-                    end if
-                    -- Ensure window is at front
-                    set index of window "\(windowName)" to 1
-                on error errMsg
-                    log "Window focus error: " & errMsg
-                end try
-            end tell
-            """
-            
-            if let appleScript = NSAppleScript(source: appScript) {
-                var error: NSDictionary?
-                appleScript.executeAndReturnError(&error)
-                if error == nil {
-                    AppLogger.shared.info("Successfully focused window using app script")
-                    return
-                }
-                AppLogger.shared.warning("App script failed: \(error?.description ?? "unknown")")
-            }
-        }
-        
-        // Approach 2: Use System Events with more robust window handling
-        let processName = runningApp.localizedName ?? app.name
-        let systemScript = """
-        tell application "System Events"
-            try
-                tell process "\(processName)"
-                    set frontmost to true
-                    if "\(windowName)" is not "" then
-                        try
-                            set targetWindow to first window whose title is "\(windowName)"
-                            perform action "AXRaise" of targetWindow
-                            click targetWindow
-                        on error
-                            -- Fallback: try by index if name fails
-                            if (count windows) > 0 then
-                                perform action "AXRaise" of window 1
-                                click window 1
-                            end if
-                        end try
-                    else
-                        -- No window name, just bring first window forward
-                        if (count windows) > 0 then
-                            perform action "AXRaise" of window 1
-                            click window 1
-                        end if
-                    end if
-                end tell
-            on error errMsg
-                log "System Events error: " & errMsg
-            end try
-        end tell
-        """
-        
-        if let systemAppleScript = NSAppleScript(source: systemScript) {
-            var error: NSDictionary?
-            systemAppleScript.executeAndReturnError(&error)
-            if let error = error {
-                AppLogger.shared.error("System Events script failed: \(error)")
-            } else {
-                AppLogger.shared.info("Window focused using System Events")
-            }
-        }
-    }
-    
-    private func ensureAppIsFrontmost(app: DockApp, runningApp: NSRunningApplication) {
-        let script = """
-        tell application "\(app.name)"
-            activate
-        end tell
-        tell application "System Events"
-            tell process "\(runningApp.localizedName ?? app.name)"
-                set frontmost to true
-            end tell
-        end tell
-        """
-        
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-            if let error = error {
-                AppLogger.shared.warning("Ensure frontmost script failed: \(error)")
+                runningApp.activate(options: [.activateAllWindows])
             }
         }
     }
@@ -1259,26 +1199,11 @@ class AppManager: ObservableObject {
         let processName = runningApp.localizedName ?? app.name
         var success = false
         
-        // Approach 1: Direct app-level close command
-        if !windowTitle.isEmpty {
-            let appScript = """
-            tell application "\(app.name)"
-                try
-                    close window "\(windowTitle)"
-                    return true
-                on error
-                    return false
-                end try
-            end tell
-            """
-            
-            if let appleScript = NSAppleScript(source: appScript) {
-                var error: NSDictionary?
-                let result = appleScript.executeAndReturnError(&error)
-                if error == nil, result.booleanValue {
-                    AppLogger.shared.info("Successfully closed window using app script")
-                    return true
-                }
+        // Approach 1: Use AX API to press close button (avoids "Choose Application" popup)
+        if windowID > 0 {
+            if closeWindowViaAX(windowID: windowID, pid: runningApp.processIdentifier) {
+                AppLogger.shared.info("Successfully closed window using AX API")
+                return true
             }
         }
         
@@ -1374,120 +1299,38 @@ class AppManager: ObservableObject {
 
     func activateApp(_ app: DockApp) {
         AppLogger.shared.info("activateApp called for \(app.name), isRunning: \(app.isRunning), isActive: \(app.runningApplication?.isActive ?? false)")
-        
+
         if let runningApp = app.runningApplication {
-            AppLogger.shared.info("Activating running app: \(app.name)")
-            
-            // Comprehensive activation sequence
+            let pid = runningApp.processIdentifier
+
             // Step 1: Unhide the app
             if runningApp.isHidden {
-                let unhideSuccess = runningApp.unhide()
-                AppLogger.shared.info("Unhide app result: \(unhideSuccess)")
+                runningApp.unhide()
             }
-            
-            // Step 2: Activate with all windows
-            var activateSuccess = false
-            if #available(macOS 14.0, *) {
-                activateSuccess = runningApp.activate()
-            } else {
-                activateSuccess = runningApp.activate(options: [.activateAllWindows])
-            }
-            
-            AppLogger.shared.info("Initial activate result: \(activateSuccess) for \(app.name)")
-            
-            // Step 3: Use AppleScript for comprehensive window restoration
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                self.fullyRestoreApp(app, runningApp: runningApp)
+
+            // Step 2: Use private APIs to focus the app's front window (no AppleScript)
+            DispatchQueue.global(qos: .userInitiated).async {
+                // Unminimize all windows
+                unminimizeAllWindowsAX(pid: pid)
+
+                // Find and focus the frontmost window
+                if let frontWindowID = getFrontWindowID(pid: pid) {
+                    focusWindowWithPrivateAPIs(windowID: frontWindowID, pid: pid)
+                } else {
+                    // No AX windows found, fall back to NSRunningApplication.activate()
+                    DispatchQueue.main.async {
+                        if #available(macOS 14.0, *) {
+                            runningApp.activate()
+                        } else {
+                            runningApp.activate(options: [.activateAllWindows])
+                        }
+                    }
+                }
             }
         } else {
             // App not running, launch it
             AppLogger.shared.info("App \(app.name) not running, launching...")
             launchApp(app)
-        }
-    }
-    
-    private func fullyRestoreApp(_ app: DockApp, runningApp: NSRunningApplication) {
-        let script = """
-        tell application "\(app.name)"
-            activate
-            try
-                -- Unminimize all windows
-                set miniaturized of every window to false
-                -- Bring first window to front
-                if (count of windows) > 0 then
-                    set index of window 1 to 1
-                end if
-            end try
-        end tell
-        tell application "System Events"
-            tell process "\(runningApp.localizedName ?? app.name)"
-                set frontmost to true
-            end tell
-        end tell
-        """
-        
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-            if let error = error {
-                AppLogger.shared.warning("Full restore script failed for \(app.name): \(error)")
-                // Fallback to simpler activation
-                activateAppWithAppleScript(app)
-            } else {
-                AppLogger.shared.info("Successfully restored \(app.name) with all windows")
-            }
-        }
-    }
-    
-    private func activateAppWithAppleScript(_ app: DockApp) {
-        let script = """
-        tell application "\(app.name)"
-            activate
-            reopen
-        end tell
-        """
-        
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-            if let error = error {
-                AppLogger.shared.warning("AppleScript activation failed for \(app.name): \(error)")
-            } else {
-                AppLogger.shared.info("AppleScript activation succeeded for \(app.name)")
-            }
-        }
-    }
-    
-    private func ensureWindowsVisible(app: DockApp, runningApp: NSRunningApplication) {
-        // Check if any windows are visible
-        let windowList = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
-        let appWindows = windowList.filter { windowInfo in
-            guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32 else { return false }
-            return ownerPID == runningApp.processIdentifier
-        }
-        
-        // If no windows are visible but app has windows, bring them forward
-        if appWindows.isEmpty && app.windowCount > 0 {
-            AppLogger.shared.info("No visible windows for \(app.name), attempting to restore...")
-            let script = """
-            tell application "\(app.name)"
-                activate
-                try
-                    if (count of windows) > 0 then
-                        set miniaturized of every window to false
-                        set index of window 1 to 1
-                    end if
-                end try
-            end tell
-            """
-            
-            if let appleScript = NSAppleScript(source: script) {
-                var error: NSDictionary?
-                appleScript.executeAndReturnError(&error)
-                if error != nil {
-                    AppLogger.shared.warning("Failed to restore windows for \(app.name)")
-                }
-            }
         }
     }
     
