@@ -41,15 +41,18 @@ actor DockBadgeService {
 
     /// Reads badge counts from Dock.app's accessibility tree in a background task.
     private func readBadgesFromDock() async -> [String: Int] {
+        // Snapshot running applications on the main thread before entering the detached task.
+        // NSWorkspace.shared is not thread-safe and must not be accessed from background threads.
+        let runningApps = await MainActor.run { NSWorkspace.shared.runningApplications }
         return await Task.detached(priority: .userInitiated) {
-            Self.readDockAXTree()
+            Self.readDockAXTree(runningApps: runningApps)
         }.value
     }
 
     /// Traverses Dock.app's AX hierarchy to extract badge labels.
     /// Dock.app structure: AXApplication -> AXList -> [AXApplicationDockItem...]
     /// Each dock item has AXStatusLabel (the badge text) when a badge is set.
-    nonisolated private static func readDockAXTree() -> [String: Int] {
+    nonisolated private static func readDockAXTree(runningApps: [NSRunningApplication]) -> [String: Int] {
         var result: [String: Int] = [:]
 
         // Find Dock.app process
@@ -83,10 +86,8 @@ actor DockBadgeService {
                 guard let statusLabel = getAXStatusLabel(of: item),
                       !statusLabel.isEmpty else { continue }
 
-                // Get the app's URL to resolve bundle identifier
-                guard let appURL = getAXURL(of: item),
-                      let bundle = Bundle(url: appURL),
-                      let bundleId = bundle.bundleIdentifier else { continue }
+                // Resolve bundle identifier from dock item URL or app title
+                guard let bundleId = resolveBundleIdentifier(of: item, runningApps: runningApps) else { continue }
 
                 let count = parseBadgeText(statusLabel)
                 if count > 0 {
@@ -126,6 +127,29 @@ actor DockBadgeService {
         return 1
     }
 
+    // MARK: - Bundle Resolution
+
+    /// Resolves the bundle identifier for a dock item.
+    /// Primary: read kAXURLAttribute → Bundle(url:) / Bundle(path:).
+    /// Fallback: match kAXTitleAttribute against pre-snapshotted running applications.
+    nonisolated private static func resolveBundleIdentifier(of item: AXUIElement, runningApps: [NSRunningApplication]) -> String? {
+        if let appURL = getAXURL(of: item) {
+            let bundle = Bundle(url: appURL) ?? Bundle(path: appURL.path)
+            if let bundleId = bundle?.bundleIdentifier {
+                return bundleId
+            }
+        }
+        // URL resolution failed — look up by app title among running applications
+        return getBundleIdByTitle(of: item, runningApps: runningApps)
+    }
+
+    nonisolated private static func getBundleIdByTitle(of element: AXUIElement, runningApps: [NSRunningApplication]) -> String? {
+        var titleRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &titleRef) == .success,
+              let title = titleRef as? String, !title.isEmpty else { return nil }
+        return runningApps.first(where: { $0.localizedName == title })?.bundleIdentifier
+    }
+
     // MARK: - AX Attribute Helpers
 
     nonisolated private static func getAXChildren(of element: AXUIElement) -> [AXUIElement]? {
@@ -159,16 +183,12 @@ actor DockBadgeService {
     nonisolated private static func getAXURL(of element: AXUIElement) -> URL? {
         var urlRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(element, kAXURLAttribute as CFString, &urlRef)
-        guard result == .success else { return nil }
+        guard result == .success, let urlRef = urlRef else { return nil }
 
+        if let url = urlRef as? URL { return url }
+        if let nsURL = urlRef as? NSURL { return nsURL as URL }
         if let urlString = urlRef as? String {
-            return URL(string: urlString)
-        }
-        if let url = urlRef as? URL {
-            return url
-        }
-        if let cfURL = urlRef as! CFURL? {
-            return cfURL as URL
+            return URL(string: urlString) ?? URL(fileURLWithPath: urlString)
         }
         return nil
     }

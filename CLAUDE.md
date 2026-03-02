@@ -1,5 +1,10 @@
 # CLAUDE.md
 
+## Tool Restrictions
+
+- **Never use `my-custom-jira` MCP tools** (e.g., `mcp__my-custom-jira__*`).
+- **Never use the `/jira-ticket` skill**.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
