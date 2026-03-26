@@ -410,14 +410,19 @@ struct AppDockItem: View {
             return nil
         }
         
-        // Listen for drag end notification to reset state
-        NotificationCenter.default.addObserver(
+        // Listen for drag end notification to reset state.
+        // Block-based addObserver returns a token that must be used for removal.
+        var token: NSObjectProtocol?
+        token = NotificationCenter.default.addObserver(
             forName: NSNotification.Name("DragEnded"),
             object: nil,
             queue: .main
         ) { _ in
             self.isDragging = false
-            NotificationCenter.default.removeObserver(self, name: NSNotification.Name("DragEnded"), object: nil)
+            if let t = token {
+                NotificationCenter.default.removeObserver(t)
+                token = nil
+            }
         }
         
         return itemProvider

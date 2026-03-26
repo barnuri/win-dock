@@ -905,6 +905,7 @@ class AppManager: ObservableObject {
         let result = AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &positionRef)
         
         if result == .success, let axValue = positionRef {
+            guard CFGetTypeID(axValue) == AXValueGetTypeID() else { return nil }
             var point = CGPoint.zero
             if AXValueGetValue(axValue as! AXValue, .cgPoint, &point) {
                 return point
@@ -912,12 +913,13 @@ class AppManager: ObservableObject {
         }
         return nil
     }
-    
+
     nonisolated private func getSize(from axWindow: AXUIElement) throws -> CGSize? {
         var sizeRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &sizeRef)
-        
+
         if result == .success, let axValue = sizeRef {
+            guard CFGetTypeID(axValue) == AXValueGetTypeID() else { return nil }
             var size = CGSize.zero
             if AXValueGetValue(axValue as! AXValue, .cgSize, &size) {
                 return size
