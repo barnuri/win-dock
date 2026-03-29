@@ -4,7 +4,7 @@ set -e
 rm -rf build/Build/Products/Release || true # Clean previous build artifacts
 
 # Only show errors from xcodebuild (no grep, use xcodebuild options)
-xcodebuild -scheme WinDock -configuration Release -derivedDataPath build -quiet -showBuildTimingSummary -hideShellScriptEnvironment CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO | xcpretty
+xcodebuild -scheme WinDock -configuration Release -derivedDataPath build -quiet -showBuildTimingSummary -hideShellScriptEnvironment | xcpretty
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     exit ${PIPESTATUS[0]}
 fi
