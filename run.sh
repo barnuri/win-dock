@@ -1,6 +1,8 @@
 #!/bin/bash
 
 set -e
+mkdir -p ./logs
+touch ./logs/app.log
 
 build_and_run() {
     ./build.sh
