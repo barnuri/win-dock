@@ -14,22 +14,23 @@ struct CGSWindowCaptureOptions: OptionSet {
 func CGSMainConnectionID() -> CGSConnectionID
 
 @_silgen_name("CGSHWCaptureWindowList")
-func CGSHWCaptureWindowList(_ cid: CGSConnectionID, _ windowList: inout CGWindowID, _ windowCount: UInt32, _ options: CGSWindowCaptureOptions) -> Unmanaged<CFArray>
+func CGSHWCaptureWindowList(_ cid: CGSConnectionID, _ windowList: inout CGWindowID, _ windowCount: UInt32, _ options: CGSWindowCaptureOptions) -> Unmanaged<CFArray>?
 
 let CGS_CONNECTION = CGSMainConnectionID()
 
 extension CGWindowID {
     func screenshot() -> CGImage? {
-        var windowId = self
-        let arrayRef = CGSHWCaptureWindowList(CGS_CONNECTION, &windowId, 1, [.ignoreGlobalClipShape, .bestResolution, .fullSize]).takeRetainedValue()
-        
-        // Safely cast to [CGImage] instead of force unwrap
-        guard let list = arrayRef as? [CGImage] else {
-            AppLogger.shared.error("Failed to cast window capture result to [CGImage]")
+        var wid = self
+        guard let unmanaged = CGSHWCaptureWindowList(CGS_CONNECTION, &wid, 1, [.ignoreGlobalClipShape, .bestResolution, .fullSize]) else {
+            AppLogger.shared.error("CGSHWCaptureWindowList returned nil for window \(self) — window likely closed/moved")
             return nil
         }
-        
-        return list.first
+        let arr = unmanaged.takeRetainedValue()
+        guard let list = arr as? [CGImage], let first = list.first else {
+            AppLogger.shared.error("CGSHWCaptureWindowList cast failed for window \(self)")
+            return nil
+        }
+        return first
     }
 }
 
@@ -143,135 +144,108 @@ struct WindowPreviewView: View {
     
     private func loadWindowPreviews() {
         isLoading = true
-        
+        // Capture value-type snapshot — safe to pass across thread boundaries.
+        // NSRunningApplication.processIdentifier is safe to read from any thread.
+        let appSnapshot = app
+
         DispatchQueue.global(qos: .userInitiated).async {
-            let previews = self.generateWindowPreviews()
-            
+            // Phase 1 (background): only C API calls that are thread-safe.
+            // No AppKit (NSImage / NSGradient / NSBezierPath / NSFont) here.
+            let captured = Self.captureWindowScreenshots(for: appSnapshot)
+
+            // Phase 2 (main thread): all AppKit / NSImage work.
             DispatchQueue.main.async {
+                var previews: [WindowPreview] = []
+
+                for item in captured {
+                    let image: NSImage
+                    if let cgImage = item.cgImage {
+                        image = NSImage(cgImage: cgImage, size: CGSize(width: 220, height: 140))
+                    } else if let fallback = self.createAppIconPreview() {
+                        image = fallback
+                    } else {
+                        continue
+                    }
+                    previews.append(WindowPreview(
+                        windowID: item.windowID,
+                        title: item.title,
+                        image: image,
+                        bounds: item.bounds,
+                        isMinimized: item.isMinimized
+                    ))
+                }
+
+                if previews.isEmpty && appSnapshot.isRunning {
+                    if let image = self.createAppIconPreview() {
+                        previews.append(WindowPreview(
+                            windowID: 0,
+                            title: appSnapshot.name,
+                            image: image,
+                            bounds: CGRect(x: 0, y: 0, width: 800, height: 600),
+                            isMinimized: false
+                        ))
+                    }
+                }
+
+                if previews.isEmpty && !appSnapshot.isRunning {
+                    if let image = self.createLaunchPreview() {
+                        previews.append(WindowPreview(
+                            windowID: 0,
+                            title: "Launch \(appSnapshot.name)",
+                            image: image,
+                            bounds: CGRect(x: 0, y: 0, width: 800, height: 600),
+                            isMinimized: false
+                        ))
+                    }
+                }
+
                 self.windowPreviews = previews
                 self.isLoading = false
             }
         }
     }
-    
-    private func generateWindowPreviews() -> [WindowPreview] {
-        var previews: [WindowPreview] = []
-        
-        // First, try to get windows from the app's windows array
+
+    // Returns raw screenshot data captured on a background thread.
+    // Must NOT touch any AppKit types (NSImage, NSColor semantic variants, NSFont, etc.).
+    private static func captureWindowScreenshots(for app: DockApp) -> [(windowID: CGWindowID, cgImage: CGImage?, title: String, bounds: CGRect, isMinimized: Bool)] {
+        var results: [(windowID: CGWindowID, cgImage: CGImage?, title: String, bounds: CGRect, isMinimized: Bool)] = []
+
         if !app.windows.isEmpty {
             for (index, window) in app.windows.enumerated() {
-                let image = createEnhancedPreview(for: window, index: index)
-                
-                if let image = image {
-                    let windowTitle = !window.title.isEmpty && window.title != app.name ? 
-                        window.title : "\(app.name) - Window \(index + 1)"
-                    let preview = WindowPreview(
-                        windowID: window.windowID,
-                        title: windowTitle,
-                        image: image,
-                        bounds: window.bounds,
-                        isMinimized: window.isMinimized
-                    )
-                    previews.append(preview)
+                guard window.windowID != 0 else {
+                    AppLogger.shared.warning("Skipping screenshot for \(app.name) window[\(index)] — windowID is 0")
+                    continue
                 }
+                let title = !window.title.isEmpty && window.title != app.name ?
+                    window.title : "\(app.name) - Window \(index + 1)"
+                AppLogger.shared.info("Capturing screenshot for \(app.name) window[\(index)] id=\(window.windowID)")
+                results.append((window.windowID, window.windowID.screenshot(), title, window.bounds, window.isMinimized))
             }
+            return results
         }
-        
-        // If no windows from app.windows but app is running, try system APIs (like alt-tab-macos)
-        if previews.isEmpty && app.isRunning {
-            if let runningApp = app.runningApplication {
-                let windowList = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
-                
-                for (_, windowInfo) in windowList.enumerated() {
-                    guard let windowPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
-                          windowPID == runningApp.processIdentifier,
-                          let windowNumber = windowInfo[kCGWindowNumber as String] as? CGWindowID,
-                          let windowBounds = windowInfo[kCGWindowBounds as String] as? [String: Any],
-                          let x = windowBounds["X"] as? CGFloat,
-                          let y = windowBounds["Y"] as? CGFloat,
-                          let width = windowBounds["Width"] as? CGFloat,
-                          let height = windowBounds["Height"] as? CGFloat else {
-                        continue
-                    }
-                    
-                    // Skip very small windows (likely system windows, like alt-tab-macos)
-                    if width < 100 || height < 50 {
-                        continue
-                    }
-                    
-                    let windowTitle = windowInfo[kCGWindowName as String] as? String ?? ""
-                    let finalTitle = !windowTitle.isEmpty && windowTitle != app.name ? 
-                        windowTitle : "\(app.name) - Window \(previews.count + 1)"
-                    let bounds = CGRect(x: x, y: y, width: width, height: height)
-                    
-                    let windowInfoStruct = WindowInfo(
-                        title: finalTitle,
-                        windowID: windowNumber,
-                        bounds: bounds,
-                        isMinimized: false,
-                        isOnScreen: true
-                    )
-                    
-                    let image = createEnhancedPreview(for: windowInfoStruct, index: previews.count)
-                    
-                    if let image = image {
-                        let preview = WindowPreview(
-                            windowID: windowNumber,
-                            title: finalTitle,
-                            image: image,
-                            bounds: bounds,
-                            isMinimized: false
-                        )
-                        previews.append(preview)
-                    }
-                    
-                    // Limit to 10 windows to avoid performance issues
-                    if previews.count >= 10 {
-                        break
-                    }
-                }
-            }
+
+        guard app.isRunning, let runningApp = app.runningApplication else { return results }
+
+        let windowList = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
+        for windowInfo in windowList {
+            guard results.count < 10,
+                  let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+                  pid == runningApp.processIdentifier,
+                  let windowNumber = windowInfo[kCGWindowNumber as String] as? CGWindowID,
+                  let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: Any],
+                  let x = boundsDict["X"] as? CGFloat, let y = boundsDict["Y"] as? CGFloat,
+                  let width = boundsDict["Width"] as? CGFloat, let height = boundsDict["Height"] as? CGFloat,
+                  width >= 100, height >= 50 else { continue }
+
+            let windowTitle = windowInfo[kCGWindowName as String] as? String ?? ""
+            let finalTitle = !windowTitle.isEmpty && windowTitle != app.name ?
+                windowTitle : "\(app.name) - Window \(results.count + 1)"
+
+            AppLogger.shared.info("Capturing screenshot for \(app.name) cg-window id=\(windowNumber)")
+            results.append((windowNumber, windowNumber.screenshot(), finalTitle, CGRect(x: x, y: y, width: width, height: height), false))
         }
-        
-        // If still no window previews but app is running, create a single app preview
-        if previews.isEmpty && app.isRunning {
-            if let image = createAppIconPreview() {
-                let preview = WindowPreview(
-                    windowID: 0,
-                    title: app.name,
-                    image: image,
-                    bounds: CGRect(x: 0, y: 0, width: 800, height: 600),
-                    isMinimized: false
-                )
-                previews.append(preview)
-            }
-        }
-        
-        // If app is not running, show a launch preview
-        if previews.isEmpty && !app.isRunning {
-            if let image = createLaunchPreview() {
-                let preview = WindowPreview(
-                    windowID: 0,
-                    title: "Launch \(app.name)",
-                    image: image,
-                    bounds: CGRect(x: 0, y: 0, width: 800, height: 600),
-                    isMinimized: false
-                )
-                previews.append(preview)
-            }
-        }
-        
-        return previews
-    }
-    
-    private func createEnhancedPreview(for window: WindowInfo?, index: Int) -> NSImage? {
-        // Try to get actual screenshot first (like alt-tab-macos)
-        if let window = window, let screenshot = window.windowID.screenshot() {
-            return NSImage(cgImage: screenshot, size: CGSize(width: 220, height: 140))
-        }
-        
-        // Fallback to app icon preview if screenshot fails
-        return createAppIconPreview()
+
+        return results
     }
     
     private func createAppIconPreview() -> NSImage? {

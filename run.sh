@@ -1,8 +1,12 @@
 #!/bin/bash
 
 set -e
-mkdir -p ./logs
-touch ./logs/app.log
+
+LOG_FILE="$HOME/Library/Logs/WinDock/app.log"
+mkdir -p "$HOME/Library/Logs/WinDock"
+touch "$LOG_FILE"
+echo "Logs will be written to $LOG_FILE"
+ln -sf "$LOG_FILE" ./logs/app.log
 
 build_and_run() {
     ./build.sh
@@ -13,11 +17,8 @@ build_and_run() {
     # Wait a moment for the process to fully terminate
     sleep 3
 
-    # run with logs ./build/Build/Products/Release/WinDock.app
-    # ./build/Build/Products/Release/WinDock.app/Contents/MacOS/WinDock
     ./open.sh
-    # tail with follow ./logs/app.log
-    tail -f ./logs/app.log
+    tail -f "$LOG_FILE"
 }
 
 # Function to run in background and listen for keypresses

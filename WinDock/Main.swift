@@ -10,16 +10,33 @@ import SettingsAccess
 import ApplicationServices
 #endif
 
+private func handleCrashSignal(_ sig: Int32) {
+    let name: String
+    switch sig {
+    case SIGABRT: name = "SIGABRT"
+    case SIGILL:  name = "SIGILL"
+    case SIGSEGV: name = "SIGSEGV"
+    case SIGFPE:  name = "SIGFPE"
+    case SIGBUS:  name = "SIGBUS"
+    case SIGPIPE: name = "SIGPIPE"
+    default:      name = "SIG(\(sig))"
+    }
+    let stack = Thread.callStackSymbols.joined(separator: "\n")
+    AppLogger.shared.error("Received \(name)\nThread: \(Thread.current)\nStack:\n\(stack)")
+    Thread.sleep(forTimeInterval: 0.1) // allow async log queue to flush
+    exit(EXIT_FAILURE)
+}
+
 private func setGlobalErrorHandlers() {
     NSSetUncaughtExceptionHandler { exception in
         AppLogger.shared.error("Uncaught exception: \(exception)\nStack: \(exception.callStackSymbols.joined(separator: "\n"))")
     }
-    signal(SIGABRT) { _ in AppLogger.shared.error("Received SIGABRT"); exit(EXIT_FAILURE) }
-    signal(SIGILL)  { _ in AppLogger.shared.error("Received SIGILL"); exit(EXIT_FAILURE) }
-    signal(SIGSEGV) { _ in AppLogger.shared.error("Received SIGSEGV"); exit(EXIT_FAILURE) }
-    signal(SIGFPE)  { _ in AppLogger.shared.error("Received SIGFPE"); exit(EXIT_FAILURE) }
-    signal(SIGBUS)  { _ in AppLogger.shared.error("Received SIGBUS"); exit(EXIT_FAILURE) }
-    signal(SIGPIPE) { _ in AppLogger.shared.error("Received SIGPIPE"); exit(EXIT_FAILURE) }
+    signal(SIGABRT) { sig in handleCrashSignal(sig) }
+    signal(SIGILL)  { sig in handleCrashSignal(sig) }
+    signal(SIGSEGV) { sig in handleCrashSignal(sig) }
+    signal(SIGFPE)  { sig in handleCrashSignal(sig) }
+    signal(SIGBUS)  { sig in handleCrashSignal(sig) }
+    signal(SIGPIPE) { sig in handleCrashSignal(sig) }
 }
 
 @main
