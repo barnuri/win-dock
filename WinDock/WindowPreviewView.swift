@@ -199,8 +199,10 @@ struct WindowPreviewView: View {
                     }
                 }
 
-                self.windowPreviews = previews
-                self.isLoading = false
+                withAnimation(nil) {
+                    self.windowPreviews = previews
+                    self.isLoading = false
+                }
             }
         }
     }

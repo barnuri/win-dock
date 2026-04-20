@@ -48,7 +48,6 @@ struct AppDockItem: View {
                         handlePreviewMouseTracking(isInside)
                     }
                 )
-                .transition(.opacity.combined(with: .scale))
         }
         .onTapGesture(perform: handleTap)
         .contextMenu {
@@ -71,17 +70,7 @@ struct AppDockItem: View {
     
     // MARK: - View Components
     
-    @State private var lastBackgroundState: (isDragging: Bool, isActive: Bool, isHovering: Bool) = (false, false, false)
-    @State private var cachedBackgroundView: AnyView?
-    
     private var backgroundStyle: some View {
-        let currentState = (isDragging: isDragging, isActive: app.isActive, isHovering: isHovering)
-        
-        // Return cached view if state hasn't changed
-        if currentState == lastBackgroundState, let cached = cachedBackgroundView {
-            return cached
-        }
-        
         let fillColor: Color = {
             if isDragging {
                 return Color.blue.opacity(0.4)
@@ -93,15 +82,15 @@ struct AppDockItem: View {
                 return Color.clear
             }
         }()
-        
-        let backgroundView = AnyView(
+
+        return AnyView(
             RoundedRectangle(cornerRadius: 6)
                 .fill(fillColor)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(
-                            app.isActive ? Color.blue.opacity(0.3) : 
-                            isHovering ? Color.white.opacity(0.2) : Color.clear, 
+                            app.isActive ? Color.blue.opacity(0.3) :
+                            isHovering ? Color.white.opacity(0.2) : Color.clear,
                             lineWidth: 1
                         )
                 )
@@ -113,14 +102,6 @@ struct AppDockItem: View {
                 .animation(.easeOut(duration: 0.1), value: app.isActive)
                 .animation(.easeOut(duration: 0.08), value: isHovering)
         )
-        
-        // Cache the result - update state immediately since we're already on MainActor
-        DispatchQueue.main.async {
-            cachedBackgroundView = backgroundView
-            lastBackgroundState = currentState
-        }
-        
-        return backgroundView
     }
     
     private var iconSection: some View {
