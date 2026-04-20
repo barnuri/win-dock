@@ -166,135 +166,160 @@ class WindowsResizeManager: ObservableObject {
             AppLogger.shared.warning("WindowsResizeManager is not running or dock areas are empty.")
             return
         }
-        
-        // Check if resizing should be disabled
-        if shouldDisableResizing() {
-            return
-        }
+        if shouldDisableResizing() { return }
 
         guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
             AppLogger.shared.error("Failed to retrieve window list.")
             return
         }
 
-
         let filteredWindows = windowList.compactMap { windowInfo -> (windowInfo: [String: Any], pid: pid_t, windowFrame: CGRect, app: NSRunningApplication)? in
-            guard 
-            let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
-            let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
-            let windowFrame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
-            let app = NSRunningApplication(processIdentifier: pid),
-            app.activationPolicy == .regular,
-            app.bundleIdentifier != Bundle.main.bundleIdentifier,
-            !app.isTerminated,
-            !app.isHidden,
-            windowInfo[kCGWindowIsOnscreen as String] as? Bool == true,
-            windowInfo[kCGWindowLayer as String] as? Int == 0
-            else {
-            return nil
-            }
-            
-            return (windowInfo: windowInfo, pid: pid, windowFrame: windowFrame, app: app)
+            guard
+                let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+                let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
+                let windowFrame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+                let app = NSRunningApplication(processIdentifier: pid),
+                app.activationPolicy == .regular,
+                app.bundleIdentifier != Bundle.main.bundleIdentifier,
+                !app.isTerminated,
+                !app.isHidden,
+                windowInfo[kCGWindowIsOnscreen as String] as? Bool == true,
+                windowInfo[kCGWindowLayer as String] as? Int == 0
+            else { return nil }
+            return (windowInfo, pid, windowFrame, app)
         }
-        guard !filteredWindows.isEmpty else {
-            return
+        guard !filteredWindows.isEmpty else { return }
+
+        // dockAreas come from dockFrame() which uses NSScreen.visibleFrame — AppKit coords
+        // (origin at bottom-left of main screen, Y increases upward).
+        // CGWindowListCopyWindowInfo returns bounds in CG/Quartz coords
+        // (origin at top-left of main screen, Y increases downward).
+        // Convert all dock areas to CG coords once so intersection math is correct.
+        let mainScreenHeight = NSScreen.screens.first?.frame.height ?? 0
+        let dockAreasCG: [NSScreen: CGRect] = dockAreas.mapValues { appkitRect in
+            CGRect(
+                x: appkitRect.minX,
+                y: mainScreenHeight - appkitRect.maxY,
+                width: appkitRect.width,
+                height: appkitRect.height
+            )
         }
-        // AppLogger.shared.info("Checking windows: \(filteredWindows.count), Screens: \(NSScreen.screens.count), Apps: \(Set(filteredWindows.map { $0.app.localizedName ?? "Unknown" }).joined(separator: ", "))")
 
         for filteredWindow in filteredWindows {
-            let windowFrame = filteredWindow.windowFrame
+            let windowFrame = filteredWindow.windowFrame  // CG coords
             let app = filteredWindow.app
 
-            // Check all screens to see if this window overlaps with any dock area
-            for (screen, dockArea) in dockAreas {
-                // Check if window is on this screen and overlaps with dock area
-                if screen.frame.intersects(windowFrame) && windowFrame.intersects(dockArea) {
-                    var newFrame = windowFrame
-                    let screenFrame = screen.frame
-                    let margin: CGFloat = 15
-                    let maxHeight = screenFrame.height - dockArea.height - margin
-                    let maxWidth = screenFrame.width - dockArea.width - margin
-                    var resized = false
-                    if dockPosition == .bottom || dockPosition == .top {
-                        if maxHeight < newFrame.height {
-                            newFrame.size.height = maxHeight
-                            resized = true
-                        }
-                    } else {
-                        if maxWidth < newFrame.width {
-                            newFrame.size.width = maxWidth
-                            resized = true
-                        }
-                    }
-                    
-                    var needToMove = false
-                    if !resized {
-                        switch dockPosition {
-                            case .bottom:
-                                if newFrame.minY > dockArea.maxY {
-                                    needToMove = true
-                                }
-                            case .top:
-                                if dockArea.maxY < screenFrame.minY {
-                                    needToMove = true
-                                }
-                            case .left:
-                                if dockArea.minX > screenFrame.maxX {
-                                    needToMove = true
-                                }
-                            case .right:
-                                if dockArea.maxX < screenFrame.minX {
-                                    needToMove = true
-                                }
-                        }
-                    }
+            for (screen, dockAreaCG) in dockAreasCG {
+                let screenFrameCG = CGRect(
+                    x: screen.frame.minX,
+                    y: mainScreenHeight - screen.frame.maxY,
+                    width: screen.frame.width,
+                    height: screen.frame.height
+                )
 
-                    if !resized && !needToMove {
-                        return
-                    }
+                guard screenFrameCG.intersects(windowFrame) && windowFrame.intersects(dockAreaCG) else {
+                    continue
+                }
 
-                    switch dockPosition {
-                        case .bottom:
-                            newFrame.origin.y = dockArea.maxY
-                        case .top:
-                            newFrame.origin.y = screenFrame.minY
-                        case .left:
-                            newFrame.origin.x = dockArea.maxX
-                        case .right:
-                            newFrame.origin.x = screenFrame.minX
+                var newFrame = windowFrame
+                let margin: CGFloat = 4
+                var resized = false
+
+                // Boundaries in CG coords derived from visibleFrame (which excludes menu bar
+                // and macOS Dock). Windows cannot be placed above the menu bar — macOS silently
+                // snaps them back — so availableHeight must account for it.
+                let menuBarCGBottom = mainScreenHeight - screen.visibleFrame.maxY
+                let bottomBoundaryCG = mainScreenHeight - screen.visibleFrame.minY
+
+                if dockPosition == .bottom || dockPosition == .top {
+                    let availableHeight: CGFloat = dockPosition == .bottom
+                        ? dockAreaCG.minY - menuBarCGBottom - margin
+                        : bottomBoundaryCG - dockAreaCG.maxY - margin
+                    if newFrame.height > availableHeight {
+                        newFrame.size.height = max(1, availableHeight)
+                        resized = true
                     }
-                    
-                    AppLogger.shared.info("Adjusting window for app \(app.localizedName ?? "Unknown") from \(windowFrame) to \(newFrame) on screen \(screen.frame). Resized: \(resized), NeedToMove: \(needToMove)")
-                    
-                    // Get the application's accessibility element
-                    let axApp = AXUIElementCreateApplication(app.processIdentifier)
-                    
-                    // Get the focused window
-                    var focusedWindowRef: CFTypeRef?
-                    let result = AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindowRef)
-                    
-                    if result == .success, let focusedWindow = focusedWindowRef as! AXUIElement? {
-                        if resized {
-                            if AXUIElementSetAttributeValue(focusedWindow, kAXSizeAttribute as CFString, AXValue.from(value: newFrame.size, type: .cgSize)!) == .success {
-                                AppLogger.shared.info("Successfully adjusted window size.")
-                            } else {
-                                AppLogger.shared.error("Failed to adjust window size for app \(app.localizedName ?? "Unknown")")
-                            }
-                        }
-                        
-                        if needToMove {
-                            if AXUIElementSetAttributeValue(focusedWindow, kAXPositionAttribute as CFString, AXValue.from(value: newFrame.origin, type: .cgPoint)!) == .success {
-                                AppLogger.shared.info("Successfully moved window to new position.")
-                            } else {
-                                AppLogger.shared.error("Failed to move window for app \(app.localizedName ?? "Unknown")")
-                            }
-                        }
+                } else {
+                    let availableWidth = screenFrameCG.width - dockAreaCG.width - margin
+                    if newFrame.width > availableWidth {
+                        newFrame.size.width = max(1, availableWidth)
+                        resized = true
+                    }
+                }
+
+                // Position window to clear the dock. For .bottom, clamp to menu bar so macOS
+                // doesn't reject the position and snap the window back (causing an infinite loop).
+                switch dockPosition {
+                case .bottom:
+                    newFrame.origin.y = max(menuBarCGBottom, dockAreaCG.minY - newFrame.height)
+                case .top:
+                    newFrame.origin.y = dockAreaCG.maxY + margin
+                case .left:
+                    newFrame.origin.x = dockAreaCG.maxX + margin
+                case .right:
+                    newFrame.origin.x = dockAreaCG.minX - newFrame.width
+                }
+
+                guard newFrame != windowFrame else { continue }
+
+                AppLogger.shared.info("Adjusting window for \(app.localizedName ?? "Unknown") from \(windowFrame) to \(newFrame). Resized: \(resized)")
+
+                guard let axWindow = findAXWindow(for: app.processIdentifier, matchingCGFrame: windowFrame) else {
+                    AppLogger.shared.error("Could not find matching AX window for \(app.localizedName ?? "Unknown")")
+                    continue
+                }
+
+                if resized {
+                    if AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, AXValue.from(value: newFrame.size, type: .cgSize)!) == .success {
+                        AppLogger.shared.info("Successfully resized window for \(app.localizedName ?? "Unknown")")
                     } else {
-                        AppLogger.shared.error("Failed to get focused window for app \(app.localizedName ?? "Unknown")")
+                        AppLogger.shared.error("Failed to resize window for \(app.localizedName ?? "Unknown")")
                     }
+                }
+                if AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, AXValue.from(value: newFrame.origin, type: .cgPoint)!) == .success {
+                    AppLogger.shared.info("Successfully moved window for \(app.localizedName ?? "Unknown")")
+                } else {
+                    AppLogger.shared.error("Failed to move window for \(app.localizedName ?? "Unknown")")
                 }
             }
         }
+    }
+
+    // Finds the AX window element whose on-screen position matches the given CGWindow frame.
+    // CGWindowList and AX both use CG coords (top-left origin, Y down), so positions are
+    // directly comparable. The focused-window shortcut is tried first for speed; if that
+    // misses, all app windows are enumerated and matched by origin with a small tolerance.
+    private func findAXWindow(for pid: pid_t, matchingCGFrame frame: CGRect) -> AXUIElement? {
+        let axApp = AXUIElementCreateApplication(pid)
+
+        func axOrigin(of axWindow: AXUIElement) -> CGPoint? {
+            var posRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &posRef) == .success,
+                  let posValue = posRef else { return nil }
+            var point = CGPoint.zero
+            AXValueGetValue(posValue as! AXValue, .cgPoint, &point)
+            return point
+        }
+
+        func matches(_ axWindow: AXUIElement) -> Bool {
+            guard let pos = axOrigin(of: axWindow) else { return false }
+            return abs(pos.x - frame.origin.x) < 5 && abs(pos.y - frame.origin.y) < 5
+        }
+
+        // Fast path: check focused window first
+        var focusedRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedRef) == .success,
+           let focused = focusedRef,
+           matches(focused as! AXUIElement) {
+            return (focused as! AXUIElement)
+        }
+
+        // Slow path: enumerate all windows
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let axWindows = windowsRef as? [AXUIElement] else { return nil }
+
+        return axWindows.first { matches($0) }
     }
 }
 
