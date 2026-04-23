@@ -10,26 +10,64 @@ import SettingsAccess
 import ApplicationServices
 #endif
 
-private func handleCrashSignal(_ sig: Int32) {
-    let name: String
+// Crash-loop guard: path written on each crash; if two crashes happen within
+// this window the app stops auto-restarting to avoid spinning.
+private let crashFlagURL = URL(fileURLWithPath: NSTemporaryDirectory())
+    .appendingPathComponent("windock_last_crash")
+private let crashLoopWindowSeconds: Double = 15
+
+private func signalName(_ sig: Int32) -> String {
     switch sig {
-    case SIGABRT: name = "SIGABRT"
-    case SIGILL:  name = "SIGILL"
-    case SIGSEGV: name = "SIGSEGV"
-    case SIGFPE:  name = "SIGFPE"
-    case SIGBUS:  name = "SIGBUS"
-    case SIGPIPE: name = "SIGPIPE"
-    default:      name = "SIG(\(sig))"
+    case SIGABRT: return "SIGABRT"
+    case SIGILL:  return "SIGILL"
+    case SIGSEGV: return "SIGSEGV"
+    case SIGFPE:  return "SIGFPE"
+    case SIGBUS:  return "SIGBUS"
+    case SIGPIPE: return "SIGPIPE"
+    default:      return "SIG(\(sig))"
     }
+}
+
+private func autoRestartUnlessCrashLoop() {
+    let now = Date().timeIntervalSince1970
+    var isLoop = false
+
+    if let data = try? Data(contentsOf: crashFlagURL),
+       let last = Double(String(data: data, encoding: .utf8) ?? ""),
+       now - last < crashLoopWindowSeconds {
+        isLoop = true
+    }
+
+    try? "\(now)".data(using: .utf8)?.write(to: crashFlagURL)
+
+    guard !isLoop else {
+        AppLogger.shared.error("Crash loop detected — skipping auto-restart")
+        return
+    }
+
+    let appPath = Bundle.main.bundlePath
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+    task.arguments = ["-n", appPath]
+    try? task.run()
+    // Brief pause so the new instance starts before we exit.
+    Thread.sleep(forTimeInterval: 0.4)
+}
+
+private func handleCrashSignal(_ sig: Int32) {
+    let name = signalName(sig)
     let stack = Thread.callStackSymbols.joined(separator: "\n")
-    AppLogger.shared.error("Received \(name)\nThread: \(Thread.current)\nStack:\n\(stack)")
-    Thread.sleep(forTimeInterval: 0.1) // allow async log queue to flush
+    AppLogger.shared.error("CRASH \(name)\nThread: \(Thread.current)\nStack:\n\(stack)")
+    Thread.sleep(forTimeInterval: 0.1)
+    autoRestartUnlessCrashLoop()
     exit(EXIT_FAILURE)
 }
 
 private func setGlobalErrorHandlers() {
     NSSetUncaughtExceptionHandler { exception in
-        AppLogger.shared.error("Uncaught exception: \(exception)\nStack: \(exception.callStackSymbols.joined(separator: "\n"))")
+        let stack = exception.callStackSymbols.joined(separator: "\n")
+        AppLogger.shared.error("Uncaught exception: \(exception)\nStack:\n\(stack)")
+        // Signal handler fires next; restart happens there.
     }
     signal(SIGABRT) { sig in handleCrashSignal(sig) }
     signal(SIGILL)  { sig in handleCrashSignal(sig) }

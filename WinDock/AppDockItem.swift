@@ -43,6 +43,10 @@ struct AppDockItem: View {
         )
         .popover(isPresented: $showWindowPreview, arrowEdge: .top) {
             WindowPreviewView(app: app, appManager: appManager)
+                // Fixed frame ensures NSHostingView always reports the same
+                // intrinsicContentSize to NSPopover, preventing the animated
+                // resize that crashes in NSMoveHelper._doAnimation.
+                .frame(width: previewPopoverWidth, height: 251)
                 .background(
                     MouseTrackingView { isInside in
                         handlePreviewMouseTracking(isInside)
@@ -223,7 +227,15 @@ struct AppDockItem: View {
     }
     
     // MARK: - Computed Properties
-    
+
+    private var previewPopoverWidth: CGFloat {
+        let itemWidth: CGFloat = 220
+        let spacing: CGFloat = 12
+        let padding: CGFloat = 32
+        let displayCount = min(max(app.windowCount, 1), 5)
+        return CGFloat(displayCount) * itemWidth + CGFloat(max(0, displayCount - 1)) * spacing + padding
+    }
+
     private var toolTip: String {
         var tooltip = app.name
         if app.isRunning {

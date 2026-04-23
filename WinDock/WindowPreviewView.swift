@@ -40,7 +40,18 @@ struct WindowPreviewView: View {
     @State private var windowPreviews: [WindowPreview] = []
     @State private var isLoading = true
     @Environment(\.dismiss) private var dismiss
-    
+
+    // Pre-computed from app.windowCount so the popover size is stable from the moment
+    // it opens — prevents NSPopover._setContentView:size:canAnimate: from triggering
+    // an animated resize that crashes in NSMoveHelper._doAnimation.
+    private var targetWidth: CGFloat {
+        let itemWidth: CGFloat = 220
+        let spacing: CGFloat = 12
+        let padding: CGFloat = 32
+        let displayCount = min(max(app.windowCount, 1), 5)
+        return CGFloat(displayCount) * itemWidth + CGFloat(max(0, displayCount - 1)) * spacing + padding
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // App header with title and close button
@@ -55,7 +66,7 @@ struct WindowPreviewView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.primary)
                 Spacer()
-                
+
                 Button(action: { dismiss() }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .medium))
@@ -71,10 +82,11 @@ struct WindowPreviewView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .background(Color(NSColor.windowBackgroundColor))
-            
+
             Divider()
-            
-            // Horizontal preview layout (Windows 11 style)
+
+            // Horizontal preview layout (Windows 11 style).
+            // All branches use the same frame dimensions so the popover never resizes.
             if isLoading {
                 VStack(spacing: 12) {
                     ProgressView()
@@ -84,9 +96,7 @@ struct WindowPreviewView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.secondary)
                 }
-                .frame(height: 160)
-                .frame(minWidth: 260)
-                .padding()
+                .frame(width: targetWidth, height: 210)
             } else if windowPreviews.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "rectangle.dashed")
@@ -96,21 +106,12 @@ struct WindowPreviewView: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.secondary)
                 }
-                .frame(height: 160)
-                .frame(minWidth: 260)
-                .padding()
+                .frame(width: targetWidth, height: 210)
             } else {
-                // Horizontal scrolling layout for multiple windows
                 let displayedWindows = Array(windowPreviews.prefix(5))
-                let itemWidth: CGFloat = 220
                 let spacing: CGFloat = 12
-                let padding: CGFloat = 32 // 16 padding on each side
-                let maxWindowsToShowWithoutScroll = 5
-                
-                let shouldShowScroll = windowPreviews.count > maxWindowsToShowWithoutScroll
-                let windowsToCalculateWidth = min(displayedWindows.count, maxWindowsToShowWithoutScroll)
-                let calculatedWidth = CGFloat(windowsToCalculateWidth) * itemWidth + CGFloat(max(0, windowsToCalculateWidth - 1)) * spacing + padding
-                
+                let shouldShowScroll = windowPreviews.count > 5
+
                 ScrollView(.horizontal, showsIndicators: shouldShowScroll) {
                     HStack(spacing: spacing) {
                         ForEach(displayedWindows, id: \.windowID) { preview in
@@ -122,8 +123,7 @@ struct WindowPreviewView: View {
                                 onWindowClosed: loadWindowPreviews
                             )
                         }
-                        
-                        // Show "more windows" indicator if there are more than 5 windows
+
                         if windowPreviews.count > 5 {
                             MoreWindowsIndicator(remainingCount: windowPreviews.count - 5)
                         }
@@ -131,7 +131,7 @@ struct WindowPreviewView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                 }
-                .frame(width: calculatedWidth)
+                .frame(width: targetWidth, height: 210)
             }
         }
         .background(Color(NSColor.windowBackgroundColor))
