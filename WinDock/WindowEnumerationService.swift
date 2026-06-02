@@ -14,7 +14,7 @@ actor WindowEnumerationService {
         let timestamp: Date
         
         var isValid: Bool {
-            Date().timeIntervalSince(timestamp) < 1.0
+            Date().timeIntervalSince(timestamp) < 5.0
         }
     }
     

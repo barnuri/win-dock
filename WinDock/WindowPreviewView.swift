@@ -39,6 +39,7 @@ struct WindowPreviewView: View {
     let appManager: AppManager
     @State private var windowPreviews: [WindowPreview] = []
     @State private var isLoading = true
+    @State private var loadToken: Int = 0
     @Environment(\.dismiss) private var dismiss
 
     // Pre-computed from app.windowCount so the popover size is stable from the moment
@@ -140,32 +141,46 @@ struct WindowPreviewView: View {
         .onAppear {
             loadWindowPreviews()
         }
+        .onDisappear {
+            loadToken &+= 1
+        }
     }
     
     private func loadWindowPreviews() {
         isLoading = true
-        // Capture value-type snapshot — safe to pass across thread boundaries.
-        // NSRunningApplication.processIdentifier is safe to read from any thread.
+        loadToken &+= 1
+        let token = loadToken
         let appSnapshot = app
 
+        // Timeout: if capture hangs (CGSHWCaptureWindowList can block indefinitely),
+        // unblock the UI after 8 seconds and show "No windows".
+        // Struct @State uses reference-counted storage, so self is safe to capture by value.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) {
+            guard self.loadToken == token, self.isLoading else { return }
+            AppLogger.shared.warning("Window preview load timed out for \(appSnapshot.name)")
+            // Invalidate token so any still-running background dispatch drops its result.
+            self.loadToken &+= 1
+            withAnimation(nil) {
+                self.windowPreviews = []
+                self.isLoading = false
+            }
+        }
+
+        // Phase 1 (background): only thread-safe C API calls — no AppKit.
         DispatchQueue.global(qos: .userInitiated).async {
-            // Phase 1 (background): only C API calls that are thread-safe.
-            // No AppKit (NSImage / NSGradient / NSBezierPath / NSFont) here.
             let captured = Self.captureWindowScreenshots(for: appSnapshot)
 
-            // Phase 2 (main thread): all AppKit / NSImage work.
+            // Phase 2 (main thread): AppKit / NSImage work, guarded by token.
             DispatchQueue.main.async {
-                var previews: [WindowPreview] = []
+                guard self.loadToken == token else { return }
 
+                var previews: [WindowPreview] = []
                 for item in captured {
-                    let image: NSImage
-                    if let cgImage = item.cgImage {
-                        image = NSImage(cgImage: cgImage, size: CGSize(width: 220, height: 140))
-                    } else if let fallback = self.createAppIconPreview() {
-                        image = fallback
-                    } else {
-                        continue
-                    }
+                    // Skip windows whose screenshot failed — they have been closed or
+                    // their window server surface is gone. Do NOT fall back to the app
+                    // icon here; that fallback runs only when the entire list is empty.
+                    guard let cgImage = item.cgImage else { continue }
+                    let image = NSImage(cgImage: cgImage, size: CGSize(width: 220, height: 140))
                     previews.append(WindowPreview(
                         windowID: item.windowID,
                         title: item.title,
@@ -175,6 +190,7 @@ struct WindowPreviewView: View {
                     ))
                 }
 
+                // Whole-list fallback: no valid screenshots at all.
                 if previews.isEmpty && appSnapshot.isRunning {
                     if let image = self.createAppIconPreview() {
                         previews.append(WindowPreview(
@@ -186,7 +202,6 @@ struct WindowPreviewView: View {
                         ))
                     }
                 }
-
                 if previews.isEmpty && !appSnapshot.isRunning {
                     if let image = self.createLaunchPreview() {
                         previews.append(WindowPreview(
@@ -213,9 +228,25 @@ struct WindowPreviewView: View {
         var results: [(windowID: CGWindowID, cgImage: CGImage?, title: String, bounds: CGRect, isMinimized: Bool)] = []
 
         if !app.windows.isEmpty {
+            // Build a live set of window IDs to filter out windows that have been closed
+            // since the last dock update. CGSHWCaptureWindowList can return a stale
+            // surface for a recently-closed ID, so membership check is the reliable gate.
+            let liveWindowIDs: Set<CGWindowID>
+            if let rawList = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
+                liveWindowIDs = Set(rawList.compactMap { $0[kCGWindowNumber as String] as? CGWindowID })
+            } else {
+                liveWindowIDs = []
+            }
+
             for (index, window) in app.windows.enumerated() {
                 guard window.windowID != 0 else {
                     AppLogger.shared.warning("Skipping screenshot for \(app.name) window[\(index)] — windowID is 0")
+                    continue
+                }
+                // Skip windows absent from the live list (process exited or window closed).
+                // Allow through if liveWindowIDs is empty (API failure) to preserve fallback.
+                if !liveWindowIDs.isEmpty && !liveWindowIDs.contains(window.windowID) {
+                    AppLogger.shared.info("Skipping dead window \(window.windowID) for \(app.name) — not in live list")
                     continue
                 }
                 let title = !window.title.isEmpty && window.title != app.name ?

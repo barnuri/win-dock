@@ -33,3 +33,4 @@ default.profraw
 __pycache__
 *.pyc
 specs
+**/agent-spec
