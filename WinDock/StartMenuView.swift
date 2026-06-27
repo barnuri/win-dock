@@ -1,16 +1,15 @@
 import SwiftUI
 import AppKit
-import Contacts
 
 struct StartMenuView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var appManager = AppManager()
-    
+    @ObservedObject private var userProfile = UserProfileManager.shared
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // User Info Header
             HStack(spacing: 12) {
-                if let profileImage = getUserProfileImage() {
+                if let profileImage = userProfile.userProfileImage {
                     Image(nsImage: profileImage)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -211,8 +210,11 @@ struct StartMenuView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.black.opacity(0.1), lineWidth: 1)
         )
+        .onAppear {
+            userProfile.loadUserProfile()
+        }
     }
-    
+
     // MARK: - Actions
     private func getUserDisplayName() -> String {
         if #available(macOS 13.0, *) {
@@ -222,53 +224,6 @@ struct StartMenuView: View {
         }
     }
 
-    private func getUserProfileImage() -> NSImage? {
-        // Try to get user's profile image from Contacts
-        if let contactImage = fetchUserContactImage() {
-            return contactImage
-        }
-        // Fallback: use generic userAccounts icon
-        return NSImage(named: NSImage.userAccountsName)
-    }
-
-    private func fetchUserContactImage() -> NSImage? {
-        let store = CNContactStore()
-        
-        // Check authorization status first
-        let authorizationStatus = CNContactStore.authorizationStatus(for: .contacts)
-        
-        switch authorizationStatus {
-        case .authorized:
-            // Permission granted, proceed with access
-            break
-        case .notDetermined:
-            // Permission not yet requested - request it synchronously for this use case
-            var granted = false
-            let semaphore = DispatchSemaphore(value: 0)
-            
-            store.requestAccess(for: .contacts) { success, error in
-                granted = success
-                semaphore.signal()
-            }
-            
-            semaphore.wait()
-            
-            if !granted {
-                return nil
-            }
-        case .denied, .restricted:
-            return nil
-        @unknown default:
-            return nil
-        }
-        
-        guard let meContact = try? store.unifiedMeContactWithKeys(toFetch: [CNContactImageDataKey as CNKeyDescriptor]),
-              let imageData = meContact.imageData,
-              let image = NSImage(data: imageData) else {
-            return nil
-        }
-        return image
-    }
     private func openBluetoothSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.Bluetooth") {
             NSWorkspace.shared.open(url)
@@ -401,7 +356,7 @@ struct StartMenuView: View {
     
     private func sleep() {
         let script = """
-        tell application "System Events"
+        tell application "Finder"
             sleep
         end tell
         """

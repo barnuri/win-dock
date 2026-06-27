@@ -23,35 +23,29 @@ class MacOSDockManager: ObservableObject {
     }
     
     func hideMacOSDock() {
-        isProcessing = true
-        lastError = nil
-        
-        let success = executeShellCommands(hideDockCommands)
-        if success {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.checkDockStatus()
-                self.isProcessing = false
-            }
-        } else {
-            isProcessing = false
-        }
+        runDockCommands(hideDockCommands)
     }
-    
+
     func showMacOSDock() {
+        runDockCommands(showDockCommands)
+    }
+
+    // Spawns the shell commands (including `killall Dock`) off the main thread so the UI never
+    // freezes while the system Dock restarts, then reports status back on the main thread.
+    private func runDockCommands(_ commands: [String]) {
         isProcessing = true
         lastError = nil
-        
-        let success = executeShellCommands(showDockCommands)
-        if success {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.checkDockStatus()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let success = self.executeShellCommands(commands)
+            DispatchQueue.main.asyncAfter(deadline: .now() + (success ? 0.5 : 0.0)) {
+                if success {
+                    self.checkDockStatus()
+                }
                 self.isProcessing = false
             }
-        } else {
-            isProcessing = false
         }
     }
-    
+
     @discardableResult
     private func executeShellCommands(_ commands: [String]) -> Bool {
         for command in commands {
@@ -89,34 +83,30 @@ class MacOSDockManager: ObservableObject {
     }
     
     private func checkDockStatus() {
-        let process = Process()
-        process.launchPath = "/usr/bin/defaults"
-        process.arguments = ["read", "com.apple.dock", "autohide"]
-        
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        
-        do {
-            try process.run()
-            process.waitUntilExit()
-            
-            if process.terminationStatus == 0 {
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0"
-                
-                DispatchQueue.main.async {
-                    self.isDockHidden = (output == "1")
+        DispatchQueue.global(qos: .utility).async {
+            let process = Process()
+            process.launchPath = "/usr/bin/defaults"
+            process.arguments = ["read", "com.apple.dock", "autohide"]
+
+            let pipe = Pipe()
+            process.standardOutput = pipe
+
+            var hidden = false
+            do {
+                try process.run()
+                process.waitUntilExit()
+
+                if process.terminationStatus == 0 {
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0"
+                    hidden = (output == "1")
                 }
-            } else {
-                // If defaults read fails, assume dock is not hidden
-                DispatchQueue.main.async {
-                    self.isDockHidden = false
-                }
+            } catch {
+                print("Failed to check dock status: \(error)")
             }
-        } catch {
-            print("Failed to check dock status: \(error)")
+
             DispatchQueue.main.async {
-                self.isDockHidden = false
+                self.isDockHidden = hidden
             }
         }
     }

@@ -1413,17 +1413,16 @@ struct RunOnLoginToggleView: View {
         .onAppear {
             isEnabled = loginItemManager.isLoginItemEnabled
         }
-    }
-    
-    private func updateLoginItemStatus(enabled: Bool) {
-        loginItemManager.isLoginItemEnabled = enabled
-
-        // Verify the change took effect
-        let actualStatus = loginItemManager.isLoginItemEnabled
-        if actualStatus != enabled {
-            // Revert UI if the change failed
-            isEnabled = actualStatus
+        .onChange(of: loginItemManager.isLoginItemEnabled) { _, newValue in
+            // Keep the toggle in sync once async (un)register completes.
+            if isEnabled != newValue {
+                isEnabled = newValue
+            }
         }
+    }
+
+    private func updateLoginItemStatus(enabled: Bool) {
+        loginItemManager.setLoginItem(enabled: enabled)
     }
 }
 

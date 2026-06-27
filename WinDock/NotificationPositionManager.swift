@@ -188,11 +188,20 @@ class NotificationPositionManager: NSObject, ObservableObject {
             setPosition(window, x: cachedInitialPosition!.x, y: cachedInitialPosition!.y)
         }
 
+        // Capture all caches together; a concurrent stopObserver() could clear them between checks.
+        guard let cachedPosition = cachedInitialPosition,
+              let cachedWindowSize = cachedInitialWindowSize,
+              let cachedNotifSize = cachedInitialNotifSize,
+              let cachedPadding = cachedInitialPadding else {
+            debugLog("Notification caches were cleared mid-move; skipping")
+            return
+        }
+
         let newPosition: (x: CGFloat, y: CGFloat) = calculateNewPosition(
-            windowSize: cachedInitialWindowSize!,
-            notifSize: cachedInitialNotifSize!,
-            position: cachedInitialPosition!,
-            padding: cachedInitialPadding!
+            windowSize: cachedWindowSize,
+            notifSize: cachedNotifSize,
+            position: cachedPosition,
+            padding: cachedPadding
         )
 
         setPosition(window, x: newPosition.x, y: newPosition.y)
@@ -227,8 +236,12 @@ class NotificationPositionManager: NSObject, ObservableObject {
     
     private func cacheInitialNotificationData(windowSize: CGSize, notifSize: CGSize, position: CGPoint) {
         guard cachedInitialPosition == nil else { return }
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            debugLog("No screen available to cache notification data")
+            return
+        }
 
-        let screenWidth: CGFloat = NSScreen.main!.frame.width
+        let screenWidth: CGFloat = screen.frame.width
         var padding: CGFloat
         var effectivePosition = position
 
@@ -268,14 +281,14 @@ class NotificationPositionManager: NSObject, ObservableObject {
             newX = 0
         }
 
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        let dockSize: CGFloat = (screen?.frame.height ?? 0) - (screen?.visibleFrame.height ?? 0)
         switch currentPosition {
         case .topLeft, .topMiddle, .topRight:
             newY = 0
         case .middleLeft, .middleRight, .deadCenter:
-            let dockSize: CGFloat = NSScreen.main!.frame.height - NSScreen.main!.visibleFrame.height
             newY = (windowSize.height - notifSize.height) / 2 - dockSize
         case .bottomLeft, .bottomMiddle, .bottomRight:
-            let dockSize: CGFloat = NSScreen.main!.frame.height - NSScreen.main!.visibleFrame.height
             newY = windowSize.height - notifSize.height - dockSize - paddingAboveDock
         }
 

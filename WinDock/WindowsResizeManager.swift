@@ -26,7 +26,6 @@ class WindowsResizeManager: ObservableObject {
     
     // References to other managers for state checking
     private let fullscreenManager = FullscreenDetectionManager.shared
-    private let macOSDockManager = MacOSDockManager()
 
     // MARK: - Lifecycle & Running Control
 
@@ -135,7 +134,9 @@ class WindowsResizeManager: ObservableObject {
 
     private func startPeriodicMonitoring() {
         monitoringTimer?.invalidate()
-        monitoringTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        // Settings/screen-change notifications drive prompt adjustments; this is a low-frequency
+        // safety sweep. The scan is skipped entirely when resizing is disabled.
+        monitoringTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             self?.resizeAndMoveWindowsIfNeeded()
         }
     }
@@ -270,13 +271,15 @@ class WindowsResizeManager: ObservableObject {
                 }
 
                 if resized {
-                    if AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, AXValue.from(value: newFrame.size, type: .cgSize)!) == .success {
+                    if let sizeValue = AXValue.from(value: newFrame.size, type: .cgSize),
+                       AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sizeValue) == .success {
                         AppLogger.shared.info("Successfully resized window for \(app.localizedName ?? "Unknown")")
                     } else {
                         AppLogger.shared.error("Failed to resize window for \(app.localizedName ?? "Unknown")")
                     }
                 }
-                if AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, AXValue.from(value: newFrame.origin, type: .cgPoint)!) == .success {
+                if let positionValue = AXValue.from(value: newFrame.origin, type: .cgPoint),
+                   AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, positionValue) == .success {
                     AppLogger.shared.info("Successfully moved window for \(app.localizedName ?? "Unknown")")
                 } else {
                     AppLogger.shared.error("Failed to move window for \(app.localizedName ?? "Unknown")")

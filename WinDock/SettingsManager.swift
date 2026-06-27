@@ -46,9 +46,9 @@ class SettingsManager: ObservableObject {
             showTaskView: userDefaults.bool(forKey: "showTaskView"),
             combineTaskbarButtons: userDefaults.bool(forKey: "combineTaskbarButtons"),
             useSmallTaskbarButtons: userDefaults.bool(forKey: "useSmallTaskbarButtons"),
-            taskbarTransparency: userDefaults.double(forKey: "taskbarTransparency") != 0 ? userDefaults.double(forKey: "taskbarTransparency") : 0.95,
+            taskbarTransparency: userDefaults.object(forKey: "taskbarTransparency") != nil ? userDefaults.double(forKey: "taskbarTransparency") : 0.95,
             showLabels: userDefaults.bool(forKey: "showLabels"),
-            animationSpeed: userDefaults.double(forKey: "animationSpeed") != 0 ? userDefaults.double(forKey: "animationSpeed") : 1.0,
+            animationSpeed: userDefaults.object(forKey: "animationSpeed") != nil ? userDefaults.double(forKey: "animationSpeed") : 1.0,
             use24HourClock: userDefaults.bool(forKey: "use24HourClock"),
             dateFormat: userDefaults.string(forKey: "dateFormat") ?? "dd/MM/yyyy",
             searchAppChoice: userDefaults.string(forKey: "searchAppChoice") ?? "spotlight",
@@ -150,10 +150,7 @@ class SettingsManager: ObservableObject {
             userDefaults.set(settings.logLevel, forKey: "logLevel")
             userDefaults.set(settings.notificationPositionEnabled, forKey: "notificationPositionEnabled")
             userDefaults.set(settings.notificationPosition, forKey: "notificationPosition")
-            
-            // Synchronize UserDefaults
-            userDefaults.synchronize()
-            
+
             importStatus = "Settings imported successfully from \(url.lastPathComponent)"
             AppLogger.shared.info("Settings imported from: \(url.path)")
             
@@ -181,9 +178,7 @@ class SettingsManager: ObservableObject {
         for key in keys {
             userDefaults.removeObject(forKey: key)
         }
-        
-        userDefaults.synchronize()
-        
+
         importStatus = "Settings reset to defaults"
         AppLogger.shared.info("Settings reset to defaults")
         

@@ -7,33 +7,32 @@ class LoginItemManager: ObservableObject {
     
     @Published var lastError: String?
     @Published var isProcessing: Bool = false
-    
+    /// Observable enabled state. Updated after register/unregister completes so SwiftUI bindings
+    /// stay in sync even with the async unregister path.
+    @Published private(set) var isLoginItemEnabled: Bool = false
+
     private let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.windock.app"
     private let hasSetDefaultKey = "HasSetDefaultLaunchAtLogin"
-    
+
     private init() {
+        isLoginItemEnabled = getLoginItemStatus()
         // Set default to true on first launch
         if !UserDefaults.standard.bool(forKey: hasSetDefaultKey) {
             UserDefaults.standard.set(true, forKey: hasSetDefaultKey)
             // Enable by default on first launch
             Task {
                 await MainActor.run {
-                    isLoginItemEnabled = true
+                    setLoginItem(enabled: true)
                 }
             }
             AppLogger.shared.info("Launch at login enabled by default on first launch")
         }
     }
-    
-    var isLoginItemEnabled: Bool {
-        get {
-            return getLoginItemStatus()
-        }
-        set {
-            setLoginItemStatus(enabled: newValue)
-        }
+
+    func setLoginItem(enabled: Bool) {
+        setLoginItemStatus(enabled: enabled)
     }
-    
+
     private func getLoginItemStatus() -> Bool {
         // Use modern ServiceManagement framework for macOS 13+
         if #available(macOS 13.0, *) {
@@ -59,17 +58,20 @@ class LoginItemManager: ObservableObject {
                     // If already enabled, no need to register again
                     if service.status == .enabled {
                         AppLogger.shared.debug("Login item already enabled")
+                        isLoginItemEnabled = true
                         isProcessing = false
                         return
                     }
 
                     try service.register()
                     AppLogger.shared.info("Successfully registered WinDock as login item")
+                    isLoginItemEnabled = true
                     isProcessing = false
                 } else {
                     // If already disabled, no need to unregister
                     if service.status == .notRegistered {
                         AppLogger.shared.debug("Login item already disabled")
+                        isLoginItemEnabled = false
                         isProcessing = false
                         return
                     }
@@ -79,6 +81,7 @@ class LoginItemManager: ObservableObject {
                         do {
                             try await service.unregister()
                             await MainActor.run {
+                                self.isLoginItemEnabled = false
                                 self.isProcessing = false
                             }
                             AppLogger.shared.info("Successfully unregistered WinDock from login items")
@@ -99,6 +102,7 @@ class LoginItemManager: ObservableObject {
         } else {
             // Fallback for older macOS versions
             legacySetLoginItemStatus(enabled: enabled)
+            isLoginItemEnabled = enabled
             isProcessing = false
         }
     }
@@ -164,6 +168,6 @@ class LoginItemManager: ObservableObject {
     }
     
     func toggleLoginItem() {
-        isLoginItemEnabled.toggle()
+        setLoginItem(enabled: !isLoginItemEnabled)
     }
 }

@@ -167,11 +167,10 @@ class NetworkInfo: ObservableObject {
             return
         }
         
-        // For WiFi, we can try to get signal strength using CoreWLAN
-        // For now, we'll use a simplified approach
+        // Show a stable "connected" strength rather than random values that flicker and
+        // misrepresent the real signal (CoreWLAN RSSI would require extra entitlements).
         if connectionType == "Wi-Fi" {
-            // This is a simplified signal strength - in a real app you'd use CoreWLAN
-            signalStrength = Int.random(in: 1...3) // Simulate varying signal strength
+            signalStrength = 3
         }
     }
 }
@@ -408,9 +407,13 @@ struct VolumeIndicatorView: View {
     }
     
     private func updateVolumeLevel() {
-        // Get system volume - simplified implementation
-        volumeLevel = 0.5
-        isMuted = false
+        // NSAppleScript is main-thread-only; these are fast built-in volume queries.
+        let volDesc = AppLogger.executeAppleScript("output volume of (get volume settings)")
+        let mutedDesc = AppLogger.executeAppleScript("output muted of (get volume settings)")
+        if let volDesc = volDesc {
+            volumeLevel = Float(volDesc.int32Value) / 100.0
+        }
+        isMuted = mutedDesc?.booleanValue ?? false
     }
 }
 
@@ -425,17 +428,23 @@ struct VolumeDetailsView: View {
                 .padding(.bottom, 4)
             
             HStack {
-                Button(action: { isMuted.toggle() }) {
+                Button(action: {
+                    isMuted.toggle()
+                    // NSAppleScript is main-thread-only.
+                    AppLogger.executeAppleScript("set volume \(isMuted ? "with" : "without") output muted")
+                }) {
                     Image(systemName: isMuted ? "speaker.slash" : "speaker.wave.3")
                         .foregroundColor(isMuted ? .red : .primary)
                 }
                 .buttonStyle(.plain)
-                
+
                 Slider(value: Binding(
                     get: { volumeLevel },
                     set: { newValue in
                         volumeLevel = newValue
                         isMuted = false
+                        // NSAppleScript is main-thread-only.
+                        AppLogger.executeAppleScript("set volume output volume \(Int(newValue * 100))")
                     }
                 ), in: 0...1)
                 
@@ -488,9 +497,12 @@ struct DateTimeView: View {
     
     private var timeString: String {
         let formatter = DateFormatter()
-        formatter.timeStyle = use24HourClock ? .short : .short
         formatter.dateStyle = .none
-        if !use24HourClock {
+        // Explicit format so the 24h/12h setting is actually honored (not left to locale).
+        if use24HourClock {
+            formatter.dateFormat = "HH:mm"
+        } else {
+            formatter.dateFormat = "h:mm a"
             formatter.amSymbol = "AM"
             formatter.pmSymbol = "PM"
         }

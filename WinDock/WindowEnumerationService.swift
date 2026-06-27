@@ -69,7 +69,9 @@ actor WindowEnumerationService {
     
     /// Synchronous window enumeration - runs on background thread.
     /// This is where all the expensive AX API calls happen.
-    private func enumerateWindowsSync(pid: pid_t, app: NSRunningApplication) async -> [WindowInfo] {
+    /// `nonisolated` so the detached task does NOT hop back onto the actor — the per-window
+    /// task group then genuinely runs in parallel instead of being serialized by the actor.
+    nonisolated private func enumerateWindowsSync(pid: pid_t, app: NSRunningApplication) async -> [WindowInfo] {
         // Create AXUIElement for the application
         let axApp = AXUIElementCreateApplication(pid)
         
@@ -92,7 +94,7 @@ actor WindowEnumerationService {
     }
     
     /// Processes AX windows concurrently using structured concurrency.
-    private func processWindowsConcurrently(
+    nonisolated private func processWindowsConcurrently(
         axWindows: [AXUIElement],
         cgWindowList: [[String: Any]],
         pid: pid_t,
@@ -121,7 +123,7 @@ actor WindowEnumerationService {
     }
     
     /// Processes a single window, extracting all necessary information.
-    private func processSingleWindow(
+    nonisolated private func processSingleWindow(
         axWindow: AXUIElement,
         cgWindowList: [[String: Any]],
         pid: pid_t,
@@ -196,12 +198,33 @@ actor WindowEnumerationService {
         if result == .success, let windowList = windowListRef as? [AXUIElement] {
             axWindows.append(contentsOf: windowList)
         }
-        
-        // Also try brute-force approach for windows on other spaces
-        axWindows.append(contentsOf: getWindowsByBruteForce(pid: pid))
-        
-        // Remove duplicates
-        return Array(Set(axWindows))
+
+        // The brute-force scan issues ~1000 private-API round-trips, so only fall back to it
+        // when the standard API found nothing (e.g. all windows live on another Space).
+        if axWindows.isEmpty {
+            axWindows.append(contentsOf: getWindowsByBruteForce(pid: pid))
+        }
+
+        // Deduplicate by resolved CGWindowID while preserving discovery order. AXUIElement
+        // identity is unreliable across standard vs. remote-token references.
+        return dedupeByWindowID(axWindows)
+    }
+
+    /// Removes duplicate AX windows by their resolved CGWindowID, preserving order.
+    nonisolated private func dedupeByWindowID(_ windows: [AXUIElement]) -> [AXUIElement] {
+        var seenWindowIDs = Set<CGWindowID>()
+        var uniqueWindows: [AXUIElement] = []
+        for window in windows {
+            guard let windowID = getWindowID(from: window) else {
+                // No resolvable ID — keep it rather than risk dropping a real window.
+                uniqueWindows.append(window)
+                continue
+            }
+            if seenWindowIDs.insert(windowID).inserted {
+                uniqueWindows.append(window)
+            }
+        }
+        return uniqueWindows
     }
     
     /// Brute-force window detection for windows on other spaces.

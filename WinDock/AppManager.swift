@@ -129,8 +129,10 @@ private func closeWindowViaAX(windowID: CGWindowID, pid: pid_t) -> Bool {
         var wid: CGWindowID = 0
         if _AXUIElementGetWindow(window, &wid) == .success, wid == windowID {
             var closeButton: CFTypeRef?
-            if AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &closeButton) == .success {
-                return AXUIElementPerformAction(closeButton as! AXUIElement, kAXPressAction as CFString) == .success
+            if AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &closeButton) == .success,
+               let button = closeButton, CFGetTypeID(button) == AXUIElementGetTypeID() {
+                let axButton = button as! AXUIElement
+                return AXUIElementPerformAction(axButton, kAXPressAction as CFString) == .success
             }
         }
     }
@@ -185,7 +187,7 @@ struct DockApp: Identifiable, Hashable {
     var isMinimized: Bool {
         guard let runningApp = runningApplication else { return false }
         // An app is considered minimized if it has windows but none are visible
-        return isRunning && !runningApp.isActive && windows.allSatisfy { $0.isMinimized }
+        return isRunning && !runningApp.isActive && !windows.isEmpty && windows.allSatisfy { $0.isMinimized }
     }
     
     var isHidden: Bool {
@@ -213,16 +215,13 @@ struct WindowInfo {
 class AppManager: ObservableObject {
     @Published var dockApps: [DockApp] = []
 
-    private var appMonitorTimer: Timer?
     private var workspaceNotificationObservers: [NSObjectProtocol] = []
     private var cancellables = Set<AnyCancellable>()
     private let pinnedAppsKey = "WinDock.PinnedApps"
     private let dockAppOrderKey = "WinDock.DockAppOrder"
     private var pinnedBundleIdentifiers: Set<String> = []
     private var dockAppOrder: [String] = []
-    // Note: Icons are cached in DockApp structures, not separately
-    private var windowAttributesCache: [CGWindowID: WindowAttributes] = [:]
-    
+
     // New services for performance optimization
     private let coordinator = BackgroundTaskCoordinator()
     private let windowService = WindowEnumerationService()
@@ -386,16 +385,15 @@ class AppManager: ObservableObject {
     }
     
     func stopMonitoring() {
-        appMonitorTimer?.invalidate()
-        appMonitorTimer = nil
-        badgeRefreshTimer?.invalidate()
-        badgeRefreshTimer = nil
+        // Only cancel pending work; observers/badge timer are app-lifetime (owned by init/deinit).
         coordinator.cancelPendingUpdates()
-        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
     private func startBadgeRefreshTimer() {
-        badgeRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+        // Badge changes outside app activation (new notifications) are picked up here. App
+        // activation/launch already invalidates the badge cache for immediate freshness, so a
+        // relatively slow poll keeps the Dock.app AX traversal cost low.
+        badgeRefreshTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 await self?.refreshBadges()
             }
@@ -469,6 +467,9 @@ class AppManager: ObservableObject {
             var newDockApps: [DockApp] = []
             var processedBundleIds: Set<String> = []
 
+            // Read all badge counts once per update (single AX traversal) instead of per app.
+            let badges = await self.badgeService.getBadges()
+
             // Use concurrent processing for heavy operations
             await withTaskGroup(of: DockApp?.self) { group in
                 for app in runningApps {
@@ -476,9 +477,9 @@ class AppManager: ObservableObject {
                           !processedBundleIds.contains(bundleId) else { continue }
 
                     processedBundleIds.insert(bundleId)
-                    
+
                     group.addTask { [weak self] in
-                        await self?.createDockApp(for: app, bundleId: bundleId)
+                        await self?.createDockApp(for: app, bundleId: bundleId, badgeCount: badges[bundleId] ?? 0)
                     }
                 }
                 
@@ -504,10 +505,18 @@ class AppManager: ObservableObject {
         }.value
     }
     
-    private func createDockApp(for app: NSRunningApplication, bundleId: String) async -> DockApp? {
+    /// Returns a fresh window list for the app, bypassing the 5s enumeration cache. Used by the
+    /// preview popover so it reflects the app's current windows in real time.
+    func liveWindows(for app: DockApp) async -> [WindowInfo] {
+        guard let runningApp = app.runningApplication else { return [] }
+        await windowService.invalidateCache(for: runningApp)
+        return await windowService.getWindows(for: runningApp)
+    }
+
+    private func createDockApp(for app: NSRunningApplication, bundleId: String, badgeCount: Int) async -> DockApp? {
         // Use WindowEnumerationService (async, off main thread)
         let windows = await windowService.getWindows(for: app)
-        let (hasNotifications, notificationCount) = await getNotificationInfoAsync(for: app)
+        let notificationCount = badgeCount
 
         return DockApp(
             bundleIdentifier: bundleId,
@@ -518,10 +527,10 @@ class AppManager: ObservableObject {
             runningApplication: app,
             windows: windows,
             notificationCount: notificationCount,
-            hasNotifications: hasNotifications
+            hasNotifications: notificationCount > 0
         )
     }
-    
+
     private func reorderApps(_ apps: inout [DockApp]) {
         if !dockAppOrder.isEmpty {
             apps.sort { lhs, rhs in
@@ -717,37 +726,66 @@ class AppManager: ObservableObject {
         }
     }
     
-    func closeWindow(windowID: CGWindowID, windowTitle: String, app: DockApp) -> Bool {
+    /// Escape a string for safe interpolation inside an AppleScript double-quoted literal.
+    private func escapeAppleScriptString(_ value: String) -> String {
+        return value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    func closeWindow(windowID: CGWindowID, windowTitle: String, app: DockApp, completion: ((Bool) -> Void)? = nil) {
         guard let runningApp = app.runningApplication else {
             AppLogger.shared.warning("Cannot close window: app is not running")
+            completion?(false)
+            return
+        }
+
+        AppLogger.shared.info("Closing window '\(windowTitle)' (ID: \(windowID)) for app \(app.name)")
+
+        let pid = runningApp.processIdentifier
+        let processName = escapeAppleScriptString(runningApp.localizedName ?? app.name)
+        let escapedTitle = escapeAppleScriptString(windowTitle)
+        let appName = app.name
+
+        // The AX path (CGWindowList + AX IPC) is the common case and is safe off the main thread,
+        // so it never freezes the taskbar. NSAppleScript, however, is main-thread-only, so the
+        // rare fallback is dispatched back to the main thread.
+        DispatchQueue.global(qos: .userInitiated).async {
+            if self.attemptCloseViaAX(windowID: windowID, pid: pid, appName: appName) {
+                DispatchQueue.main.async { completion?(true) }
+                return
+            }
+            DispatchQueue.main.async {
+                let success = self.closeWindowViaAppleScript(windowTitle: escapedTitle, processName: processName)
+                completion?(success)
+            }
+        }
+    }
+
+    /// AX-based close (off-main safe). Verifies ownership, then presses the close button.
+    private nonisolated func attemptCloseViaAX(windowID: CGWindowID, pid: pid_t, appName: String) -> Bool {
+        guard windowID > 0 else { return false }
+
+        // Verify the window belongs to this app
+        guard let windowList = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]],
+              let windowInfo = windowList.first,
+              let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
+              ownerPID == pid else {
+            AppLogger.shared.warning("Window \(windowID) does not belong to app \(appName)")
             return false
         }
-        
-        AppLogger.shared.info("Closing window '\(windowTitle)' (ID: \(windowID)) for app \(app.name)")
-        
-        // Verify the window belongs to this app
-        if windowID > 0 {
-            guard let windowList = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]],
-                  let windowInfo = windowList.first,
-                  let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
-                  ownerPID == runningApp.processIdentifier else {
-                AppLogger.shared.warning("Window \(windowID) does not belong to app \(app.name)")
-                return false
-            }
+
+        if closeWindowViaAX(windowID: windowID, pid: pid) {
+            AppLogger.shared.info("Successfully closed window using AX API")
+            return true
         }
-        
-        // Try multiple approaches for closing the window
-        let processName = runningApp.localizedName ?? app.name
+        return false
+    }
+
+    /// AppleScript fallback close. Must run on the main thread (NSAppleScript is main-thread-only).
+    private func closeWindowViaAppleScript(windowTitle: String, processName: String) -> Bool {
         var success = false
-        
-        // Approach 1: Use AX API to press close button (avoids "Choose Application" popup)
-        if windowID > 0 {
-            if closeWindowViaAX(windowID: windowID, pid: runningApp.processIdentifier) {
-                AppLogger.shared.info("Successfully closed window using AX API")
-                return true
-            }
-        }
-        
+
         // Approach 2: System Events with accessibility actions
         let systemScript = """
         tell application "System Events"
@@ -892,11 +930,12 @@ class AppManager: ObservableObject {
     
     func cycleWindows(for app: DockApp) {
         guard app.runningApplication != nil else { return }
-        
+
+        let processName = escapeAppleScriptString(app.name)
         // Use AppleScript to cycle through windows
         let script = """
         tell application "System Events"
-            tell process "\(app.name)"
+            tell process "\(processName)"
                 if (count of windows) > 1 then
                     set frontmost to true
                     click menu item "Cycle Through Windows" of menu "Window" of menu bar 1
@@ -904,8 +943,9 @@ class AppManager: ObservableObject {
             end tell
         end tell
         """
-        
-        AppLogger.executeAppleScript(script, description: "Launch app \(app.name)")
+
+        // NSAppleScript is main-thread-only; this is a quick, user-initiated action.
+        AppLogger.executeAppleScript(script, description: "Cycle windows \(app.name)")
     }
     
     func hideApp(_ app: DockApp) {
@@ -936,21 +976,19 @@ class AppManager: ObservableObject {
                 runningApp.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
             }
             
-            // Show Exposé for this app
+            // Show Exposé for this app. NSAppleScript is main-thread-only.
+            let processName = escapeAppleScriptString(app.name)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 let script = """
                 tell application "System Events"
-                    tell process "\(app.name)"
+                    tell process "\(processName)"
                         set frontmost to true
                     end tell
                     key code 101 using {control down}
                 end tell
                 """
-                
-                if let appleScript = NSAppleScript(source: script) {
-                    var error: NSDictionary?
-                    appleScript.executeAndReturnError(&error)
-                }
+
+                AppLogger.executeAppleScript(script, description: "Show all windows \(app.name)")
             }
         }
     }
@@ -992,11 +1030,4 @@ class AppManager: ObservableObject {
         UserDefaults.standard.set(Array(pinnedBundleIdentifiers), forKey: pinnedAppsKey)
     }
     
-    private func getNotificationInfoAsync(for app: NSRunningApplication) async -> (hasNotifications: Bool, notificationCount: Int) {
-        guard let bundleIdentifier = app.bundleIdentifier else {
-            return (false, 0)
-        }
-        let count = await badgeService.getBadgeCount(for: bundleIdentifier)
-        return (count > 0, count)
-    }
 }

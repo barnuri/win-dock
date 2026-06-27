@@ -7,13 +7,20 @@ class UserProfileManager: ObservableObject {
     
     @Published private(set) var userProfileImage: NSImage?
     @Published private(set) var userName: String = ""
-    
+
+    private var hasLoaded = false
+
     private init() {
         AppLogger.shared.debug("UserProfileManager initializing - bundle path: \(Bundle.main.bundlePath)")
         loadUserProfile()
     }
-    
+
     func loadUserProfile() {
+        // The profile (image/name) doesn't change during a session and loading it spawns
+        // subprocesses and blocks on Contacts permission, so do the expensive work only once.
+        guard !hasLoaded else { return }
+        hasLoaded = true
+
         AppLogger.shared.debug("UserProfileManager.loadUserProfile() called")
         DispatchQueue.global(qos: .background).async {
             let image = self.fetchUserProfileImage()

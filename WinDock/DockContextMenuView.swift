@@ -105,7 +105,7 @@ struct DockContextMenuView: View {
     
     private func sleep() {
         executeAppleScript("""
-        tell application "System Events"
+        tell application "Finder"
             sleep
         end tell
         """)

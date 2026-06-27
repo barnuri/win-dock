@@ -101,8 +101,8 @@ class DockWindow: NSPanel {
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
+            // DockView reacts to setting changes via @AppStorage — no need to rebuild it.
             self.updatePosition()
-            self.updateDockView()
             self.handleAutoHideSettingChange()
         }
 
@@ -126,17 +126,11 @@ class DockWindow: NSPanel {
     override var canBecomeMain: Bool { false }
     
     private func setupDockView() {
-        let dockView = DockView()
+        let dockView = DockView(appManager: appManager)
         let hostingView = NSHostingView(rootView: dockView)
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         contentView = hostingView
         self.dockView = hostingView
-    }
-    
-    private func updateDockView() {
-        guard let hostingView = dockView else { return }
-        hostingView.rootView = DockView()
-        setupTrackingArea()
     }
     
     private func handleAutoHideSettingChange() {
@@ -275,7 +269,8 @@ class DockWindow: NSPanel {
     }
     
     func cleanup() {
-        appManager.stopMonitoring()
+        // appManager is shared across all dock windows and lives for the app's lifetime — do not
+        // stop it here or closing one window (e.g. a disconnected monitor) freezes the others.
         fullscreenManager.stopMonitoring()
         cancellables.removeAll()
     }

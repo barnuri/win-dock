@@ -82,10 +82,8 @@ struct Main: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     init() {
-        // Start the WindowsResizeManager only if enabled in settings
-        if UserDefaults.standard.bool(forKey: "enableWindowsResize") {
-            WindowsResizeManager.shared.start()
-        }
+        // WindowsResizeManager is started in AppDelegate.applicationDidFinishLaunching, after
+        // accessibility permissions are set up — starting here (before launch) is too early.
     }
 
     var body: some Scene {
@@ -489,12 +487,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc private func statusBarItemClicked() {
-        // Show dock window on all displays and bring to front
+        // Bring each dock window to front without altering its configured level/collectionBehavior
+        // (DockWindow sets .floating + specific behavior; overwriting them here breaks "always on top").
         for dockWindow in dockWindows {
-            dockWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .participatesInCycle]
-            dockWindow.level = .normal
             dockWindow.orderFrontRegardless()
-            dockWindow.makeKeyAndOrderFront(nil)
         }
         NSApp.activate(ignoringOtherApps: true)
     }

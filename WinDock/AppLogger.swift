@@ -48,7 +48,18 @@ final class AppLogger {
     
     // Thread-safe logging queue
     private let logQueue = DispatchQueue(label: "AppLoggerQueue", qos: .background)
-    
+
+    // Reused across writes — allocating a formatter per line is expensive on a hot path.
+    private static let timestampFormatter = ISO8601DateFormatter()
+
+    // Persistent write handles keyed by file path (accessed only on logQueue) so each log line
+    // doesn't pay an open/seek/close syscall cycle.
+    private var fileHandles: [String: FileHandle] = [:]
+
+    // Writes since the last rotation check; rotation is re-evaluated periodically at runtime.
+    private var writesSinceRotationCheck = 0
+    private let rotationCheckInterval = 200
+
     // Log buffer to store recent logs in memory for quick access
     private var recentLogs: [String] = []
     private let maxRecentLogs = 100
@@ -146,37 +157,63 @@ final class AppLogger {
     // MARK: - Private Helper Methods
     
     private func write(_ message: String, level: LogLevel, to fileURL: URL, includeConsole: Bool = false) {
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let formattedLog = "[\(timestamp)] \(level.emoji) [\(level.rawValue)] \(message)"
-        
+        let now = Date()
         // Store in recent logs buffer
         logQueue.async { [weak self] in
             guard let self = self else { return }
-            
+
+            let timestamp = AppLogger.timestampFormatter.string(from: now)
+            let formattedLog = "[\(timestamp)] \(level.emoji) [\(level.rawValue)] \(message)"
+
             // Add to recent logs buffer
             self.recentLogs.append(formattedLog)
             if self.recentLogs.count > self.maxRecentLogs {
                 self.recentLogs.removeFirst()
             }
-            
+
             // Print to console if enabled
             if self.enableConsoleLogs || includeConsole {
                 print(formattedLog)
             }
-            
-            // Write to file
+
+            // Write to file using a persistent handle
             let lineWithNewline = formattedLog + "\n"
             if let data = lineWithNewline.data(using: .utf8) {
-                if FileManager.default.fileExists(atPath: fileURL.path) {
-                    if let handle = try? FileHandle(forWritingTo: fileURL) {
-                        handle.seekToEndOfFile()
-                        handle.write(data)
-                        try? handle.close()
-                    }
-                } else {
-                    try? data.write(to: fileURL)
-                }
+                self.appendToFile(data, fileURL: fileURL)
             }
+
+            // Periodically re-check rotation so files don't grow unbounded during a session.
+            self.writesSinceRotationCheck += 1
+            if self.writesSinceRotationCheck >= self.rotationCheckInterval {
+                self.writesSinceRotationCheck = 0
+                self.rotateLogIfNeeded(self.logFileURL)
+                self.rotateLogIfNeeded(self.errorFileURL)
+                self.rotateLogIfNeeded(self.debugFileURL)
+            }
+        }
+    }
+
+    /// Appends data using a cached, persistent FileHandle. Must be called on `logQueue`.
+    private func appendToFile(_ data: Data, fileURL: URL) {
+        if let handle = fileHandles[fileURL.path] {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            return
+        }
+
+        if !FileManager.default.fileExists(atPath: fileURL.path) {
+            FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: fileURL) else { return }
+        handle.seekToEndOfFile()
+        handle.write(data)
+        fileHandles[fileURL.path] = handle
+    }
+
+    /// Closes and forgets the cached handle for a file (call before moving/replacing it).
+    private func closeHandle(for fileURL: URL) {
+        if let handle = fileHandles.removeValue(forKey: fileURL.path) {
+            try? handle.close()
         }
     }
     
@@ -200,13 +237,18 @@ final class AppLogger {
         do {
             let attributes = try fileManager.attributesOfItem(atPath: fileURL.path)
             if let fileSize = attributes[.size] as? UInt64, fileSize > maxLogFileSizeBytes {
-                // Create a backup of the current log
-                let backupURL = fileURL.deletingPathExtension().appendingPathExtension("\(Date().timeIntervalSince1970).log")
+                // Close the persistent handle so the move targets the right inode and the next
+                // write reopens the fresh file.
+                closeHandle(for: fileURL)
+
+                // Create a backup of the current log (integer timestamp avoids odd float suffixes)
+                let backupSuffix = Int(Date().timeIntervalSince1970)
+                let backupURL = fileURL.deletingPathExtension().appendingPathExtension("\(backupSuffix).log")
                 try fileManager.moveItem(at: fileURL, to: backupURL)
-                
+
                 // Create a new empty log file
                 try Data().write(to: fileURL)
-                
+
                 info("Log rotated: \(fileURL.lastPathComponent) -> \(backupURL.lastPathComponent)")
             }
         } catch {

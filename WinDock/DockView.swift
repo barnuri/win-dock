@@ -1,22 +1,8 @@
 import SwiftUI
 import AppKit
 
-/// Immutable cache for computed materials - prevents race conditions
-struct MaterialCache: Equatable {
-    let transparency: Double
-    let material: AnyShapeStyle
-    
-    func isValid(for transparency: Double) -> Bool {
-        return self.transparency == transparency
-    }
-    
-    static func == (lhs: MaterialCache, rhs: MaterialCache) -> Bool {
-        return lhs.transparency == rhs.transparency
-    }
-}
-
 struct DockView: View {
-    @StateObject private var appManager = AppManager()
+    @ObservedObject var appManager: AppManager
     @State private var showingPreview = false
     @State private var previewWindow: NSWindow?
     @State private var showStartMenu = false
@@ -35,42 +21,18 @@ struct DockView: View {
             dockMainContent(geometry: geometry)
         }
         .background(Color.clear)
-        .onAppear {
-            appManager.startMonitoring()
-        }
-        .onDisappear {
-            appManager.stopMonitoring()
-        }
     }
     
-    // Immutable material cache - no race conditions
-    @State private var cachedMaterial: MaterialCache?
-    
+    // Pure, cheap computation — safe to evaluate during `body`. Never mutate state here.
     private var backgroundMaterial: some ShapeStyle {
         let currentTransparency = taskbarTransparency
-        
-        // Check cache - synchronous, no race condition
-        if let cache = cachedMaterial, cache.isValid(for: currentTransparency) {
-            return cache.material
-        }
-        
-        // Compute new material (fast, synchronous operation)
-        let material: AnyShapeStyle
         if currentTransparency >= 0.95 {
-            // Use glass effect for high transparency
-            material = AnyShapeStyle(.regularMaterial)
+            return AnyShapeStyle(.regularMaterial)
         } else if currentTransparency >= 0.7 {
-            // Use blurred material for medium transparency
-            material = AnyShapeStyle(.thinMaterial)
+            return AnyShapeStyle(.thinMaterial)
         } else {
-            // Use solid color for low transparency
-            material = AnyShapeStyle(Color(NSColor.windowBackgroundColor))
+            return AnyShapeStyle(Color(NSColor.windowBackgroundColor))
         }
-        
-        // Update cache atomically (value type = thread-safe)
-        cachedMaterial = MaterialCache(transparency: currentTransparency, material: material)
-        
-        return material
     }
 
     @ViewBuilder
@@ -362,10 +324,9 @@ struct DockDropDelegate: DropDelegate {
             }
             
             AppLogger.shared.info("Moving app from index \(fromIndex) to insertion index \(self.insertionIndex)")
-            
-            // Calculate the correct insertion index
-            let toIndex = fromIndex < self.insertionIndex ? self.insertionIndex - 1 : self.insertionIndex
-            self.appManager.moveApp(from: fromIndex, to: toIndex)
+
+            // Pass the raw insertion index; moveApp applies the single off-by-one adjustment.
+            self.appManager.moveApp(from: fromIndex, to: self.insertionIndex)
         }
     }
 }

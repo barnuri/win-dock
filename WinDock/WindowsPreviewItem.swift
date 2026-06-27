@@ -86,7 +86,7 @@ struct WindowsPreviewItem: View {
             .background(
                 // Add middle-click detection
                 MiddleClickDetector { buttonNumber in
-                    if buttonNumber == 3 { // Middle button
+                    if buttonNumber == 2 { // Middle button (macOS: 0=left, 1=right, 2=middle)
                         closeWindow()
                         dismiss()
                     }
@@ -130,14 +130,14 @@ struct WindowsPreviewItem: View {
     }
     
     private func closeWindow() {
-        let success = appManager.closeWindow(
+        appManager.closeWindow(
             windowID: preview.windowID,
             windowTitle: preview.title,
             app: app
-        )
-        
-        if success {
-            onWindowClosed()
+        ) { success in
+            if success {
+                onWindowClosed()
+            }
         }
     }
 }

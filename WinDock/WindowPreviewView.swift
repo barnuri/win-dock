@@ -40,6 +40,7 @@ struct WindowPreviewView: View {
     @State private var windowPreviews: [WindowPreview] = []
     @State private var isLoading = true
     @State private var loadToken: Int = 0
+    @State private var refreshTask: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
 
     // Pre-computed from app.windowCount so the popover size is stable from the moment
@@ -109,24 +110,20 @@ struct WindowPreviewView: View {
                 }
                 .frame(width: targetWidth, height: 210)
             } else {
-                let displayedWindows = Array(windowPreviews.prefix(5))
                 let spacing: CGFloat = 12
+                // Show ALL windows; the horizontal ScrollView reveals any beyond the fixed width.
                 let shouldShowScroll = windowPreviews.count > 5
 
                 ScrollView(.horizontal, showsIndicators: shouldShowScroll) {
                     HStack(spacing: spacing) {
-                        ForEach(displayedWindows, id: \.windowID) { preview in
+                        ForEach(windowPreviews, id: \.windowID) { preview in
                             WindowsPreviewItem(
                                 preview: preview,
                                 app: app,
                                 appManager: appManager,
                                 hasMultipleWindows: windowPreviews.count > 1,
-                                onWindowClosed: loadWindowPreviews
+                                onWindowClosed: { loadWindowPreviews(isInitialLoad: false) }
                             )
-                        }
-
-                        if windowPreviews.count > 5 {
-                            MoreWindowsIndicator(remainingCount: windowPreviews.count - 5)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -140,94 +137,114 @@ struct WindowPreviewView: View {
         .shadow(color: Color.black.opacity(0.25), radius: 16, x: 0, y: 8)
         .onAppear {
             loadWindowPreviews()
+            startPeriodicRefresh()
         }
         .onDisappear {
             loadToken &+= 1
+            refreshTask?.cancel()
+            refreshTask = nil
+        }
+    }
+
+    /// Keeps the preview live while the popover is open — reflects windows opened/closed/retitled
+    /// elsewhere within ~1s without blocking the main thread or resizing the popover.
+    private func startPeriodicRefresh() {
+        refreshTask?.cancel()
+        refreshTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(1100))
+                if Task.isCancelled { break }
+                loadWindowPreviews(isInitialLoad: false)
+            }
         }
     }
     
-    private func loadWindowPreviews() {
-        isLoading = true
+    private func loadWindowPreviews(isInitialLoad: Bool = true) {
+        if isInitialLoad && windowPreviews.isEmpty {
+            isLoading = true
+        }
         loadToken &+= 1
         let token = loadToken
         let appSnapshot = app
 
-        // Timeout: if capture hangs (CGSHWCaptureWindowList can block indefinitely),
-        // unblock the UI after 8 seconds and show "No windows".
-        // Struct @State uses reference-counted storage, so self is safe to capture by value.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) {
-            guard self.loadToken == token, self.isLoading else { return }
-            AppLogger.shared.warning("Window preview load timed out for \(appSnapshot.name)")
-            // Invalidate token so any still-running background dispatch drops its result.
-            self.loadToken &+= 1
-            withAnimation(nil) {
-                self.windowPreviews = []
-                self.isLoading = false
-            }
+        // Stall recovery: if enumeration/capture hangs (e.g. AX deadlock), clear the spinner so it
+        // can't spin forever. Guard on isLoading only (NOT the per-load token — the 1.1s periodic
+        // refresh bumps the token within 1.1s, which would otherwise defeat this timer). isLoading
+        // is only true during the first load, so clearing it from any settled timer is safe.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
+            guard self.isLoading else { return }
+            self.isLoading = false
         }
 
-        // Phase 1 (background): only thread-safe C API calls — no AppKit.
-        DispatchQueue.global(qos: .userInitiated).async {
-            let captured = Self.captureWindowScreenshots(for: appSnapshot)
+        Task { @MainActor in
+            // Fetch a fresh window list (off-main via the actor), bypassing the dock's 5s cache,
+            // so the preview reflects the app's current windows — including ones opened after the
+            // popover appeared.
+            let liveWindows = await appManager.liveWindows(for: appSnapshot)
+            guard self.loadToken == token else { return }
 
-            // Phase 2 (main thread): AppKit / NSImage work, guarded by token.
-            DispatchQueue.main.async {
-                guard self.loadToken == token else { return }
+            // Capture screenshots off the main thread (thread-safe C APIs only — no AppKit).
+            let captured = await Task.detached(priority: .userInitiated) {
+                WindowPreviewView.captureWindowScreenshots(windows: liveWindows, app: appSnapshot)
+            }.value
+            guard self.loadToken == token else { return }
 
-                var previews: [WindowPreview] = []
-                for item in captured {
-                    // Skip windows whose screenshot failed — they have been closed or
-                    // their window server surface is gone. Do NOT fall back to the app
-                    // icon here; that fallback runs only when the entire list is empty.
-                    guard let cgImage = item.cgImage else { continue }
-                    let image = NSImage(cgImage: cgImage, size: CGSize(width: 220, height: 140))
-                    previews.append(WindowPreview(
-                        windowID: item.windowID,
-                        title: item.title,
-                        image: image,
-                        bounds: item.bounds,
-                        isMinimized: item.isMinimized
-                    ))
+            // Build NSImages on the main thread (AppKit).
+            var previews: [WindowPreview] = []
+            for item in captured {
+                let image: NSImage
+                if let cgImage = item.cgImage {
+                    // Native pixel size preserves aspect ratio under .aspectRatio in WindowsPreviewItem.
+                    image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+                } else if item.isMinimized, let placeholder = self.createAppIconPreview() {
+                    // Minimized windows have no live surface — show a placeholder; the item draws
+                    // a "Minimized" overlay on top so the window is still represented.
+                    image = placeholder
+                } else {
+                    // Screenshot failed for a non-minimized window — closed or surface gone.
+                    continue
                 }
+                previews.append(WindowPreview(
+                    windowID: item.windowID,
+                    title: item.title,
+                    image: image,
+                    bounds: item.bounds,
+                    isMinimized: item.isMinimized
+                ))
+            }
 
-                // Whole-list fallback: no valid screenshots at all.
-                if previews.isEmpty && appSnapshot.isRunning {
-                    if let image = self.createAppIconPreview() {
-                        previews.append(WindowPreview(
-                            windowID: 0,
-                            title: appSnapshot.name,
-                            image: image,
-                            bounds: CGRect(x: 0, y: 0, width: 800, height: 600),
-                            isMinimized: false
-                        ))
-                    }
-                }
-                if previews.isEmpty && !appSnapshot.isRunning {
-                    if let image = self.createLaunchPreview() {
-                        previews.append(WindowPreview(
-                            windowID: 0,
-                            title: "Launch \(appSnapshot.name)",
-                            image: image,
-                            bounds: CGRect(x: 0, y: 0, width: 800, height: 600),
-                            isMinimized: false
-                        ))
-                    }
-                }
+            if previews.isEmpty && appSnapshot.isRunning, let image = self.createAppIconPreview() {
+                previews.append(WindowPreview(
+                    windowID: 0,
+                    title: appSnapshot.name,
+                    image: image,
+                    bounds: CGRect(x: 0, y: 0, width: 800, height: 600),
+                    isMinimized: false
+                ))
+            }
+            if previews.isEmpty && !appSnapshot.isRunning, let image = self.createLaunchPreview() {
+                previews.append(WindowPreview(
+                    windowID: 0,
+                    title: "Launch \(appSnapshot.name)",
+                    image: image,
+                    bounds: CGRect(x: 0, y: 0, width: 800, height: 600),
+                    isMinimized: false
+                ))
+            }
 
-                withAnimation(nil) {
-                    self.windowPreviews = previews
-                    self.isLoading = false
-                }
+            withAnimation(nil) {
+                self.windowPreviews = previews
+                self.isLoading = false
             }
         }
     }
 
     // Returns raw screenshot data captured on a background thread.
     // Must NOT touch any AppKit types (NSImage, NSColor semantic variants, NSFont, etc.).
-    private static func captureWindowScreenshots(for app: DockApp) -> [(windowID: CGWindowID, cgImage: CGImage?, title: String, bounds: CGRect, isMinimized: Bool)] {
+    private static func captureWindowScreenshots(windows: [WindowInfo], app: DockApp) -> [(windowID: CGWindowID, cgImage: CGImage?, title: String, bounds: CGRect, isMinimized: Bool)] {
         var results: [(windowID: CGWindowID, cgImage: CGImage?, title: String, bounds: CGRect, isMinimized: Bool)] = []
 
-        if !app.windows.isEmpty {
+        if !windows.isEmpty {
             // Build a live set of window IDs to filter out windows that have been closed
             // since the last dock update. CGSHWCaptureWindowList can return a stale
             // surface for a recently-closed ID, so membership check is the reliable gate.
@@ -238,14 +255,15 @@ struct WindowPreviewView: View {
                 liveWindowIDs = []
             }
 
-            for (index, window) in app.windows.enumerated() {
+            for (index, window) in windows.enumerated() {
                 guard window.windowID != 0 else {
                     AppLogger.shared.warning("Skipping screenshot for \(app.name) window[\(index)] — windowID is 0")
                     continue
                 }
                 // Skip windows absent from the live list (process exited or window closed).
-                // Allow through if liveWindowIDs is empty (API failure) to preserve fallback.
-                if !liveWindowIDs.isEmpty && !liveWindowIDs.contains(window.windowID) {
+                // Minimized windows legitimately have no on-screen surface, so trust the AX
+                // enumeration for those. Allow all through if liveWindowIDs is empty (API failure).
+                if !liveWindowIDs.isEmpty && !liveWindowIDs.contains(window.windowID) && !window.isMinimized {
                     AppLogger.shared.info("Skipping dead window \(window.windowID) for \(app.name) — not in live list")
                     continue
                 }
@@ -405,44 +423,6 @@ struct WindowPreviewView: View {
     }
 }
 
-struct MoreWindowsIndicator: View {
-    let remainingCount: Int
-    
-    var body: some View {
-        VStack(spacing: 8) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(NSColor.controlBackgroundColor))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-                    )
-                
-                VStack(spacing: 8) {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(.secondary)
-                    
-                    Text("+\(remainingCount)")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.secondary)
-                    
-                    Text("more")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.secondary)
-                }
-            }
-            .frame(width: 220, height: 140)
-            
-            Text("More windows")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.secondary)
-                .frame(maxWidth: 220)
-        }
-        .padding(4)
-    }
-}
-
 // MARK: - Middle Click Detection
 
 struct MiddleClickDetector: NSViewRepresentable {
@@ -466,7 +446,7 @@ class MiddleClickView: NSView {
     
     override func otherMouseDown(with event: NSEvent) {
         super.otherMouseDown(with: event)
-        // Button number 3 is typically the middle button
+        // macOS button numbers: 0=left, 1=right, 2=middle. The handler filters for middle.
         onMiddleClick?(Int(event.buttonNumber))
     }
     

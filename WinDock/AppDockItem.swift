@@ -12,8 +12,6 @@ struct AppDockItem: View {
     @State private var showWindowPreview = false
     @State private var hidePreviewTask: Task<Void, Never>?
     @State private var previewDebounceTask: Task<Void, Never>?
-    @State private var lastPreviewUpdate: Date = Date()
-    private let previewDebounceDelay: TimeInterval = 0.15
       
     private var iconFrame: CGFloat { 
         iconSize * 0.7 
@@ -70,6 +68,12 @@ struct AppDockItem: View {
         .animation(.easeOut(duration: 0.15), value: isDragging)
         .animation(.easeOut(duration: 0.1), value: isHovering)
         .help(toolTip)
+        .onDisappear {
+            // Cancel pending work so tasks don't mutate state on a removed view.
+            mouseTrackingTask?.cancel()
+            previewDebounceTask?.cancel()
+            hidePreviewTask?.cancel()
+        }
     }
     
     // MARK: - View Components
@@ -277,34 +281,26 @@ struct AppDockItem: View {
                 // Cancel any pending hide tasks
                 hidePreviewTask?.cancel()
                 
-                // Debounce preview showing to prevent excessive updates
+                // Debounce preview showing — always cancel and reschedule so quick hover
+                // in/out cycles don't permanently suppress the preview.
                 previewDebounceTask?.cancel()
-                
-                // Show preview for all apps (single window, multiple windows, or not running)
-                let now = Date()
-                let timeSinceLastUpdate = now.timeIntervalSince(lastPreviewUpdate)
-                
-                // Only show preview if enough time has passed since last update
-                if timeSinceLastUpdate >= previewDebounceDelay {
-                    previewDebounceTask = Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(350))
-                        
-                        guard !Task.isCancelled, isHovering else { return }
-                        
-                        lastPreviewUpdate = Date()
-                        showWindowPreview = true
-                    }
+                previewDebounceTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(350))
+
+                    guard !Task.isCancelled, isHovering else { return }
+
+                    showWindowPreview = true
                 }
             } else {
                 // Cancel preview debounce when leaving
                 previewDebounceTask?.cancel()
-                
-                // Create a new hide task with optimized delay
+
+                // Create a new hide task with a short delay (allows moving onto the popover)
                 hidePreviewTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(5000))
-                    
+                    try? await Task.sleep(for: .milliseconds(250))
+
                     guard !Task.isCancelled, !isHovering else { return }
-                    
+
                     withAnimation(.easeOut(duration: 0.1)) {
                         showWindowPreview = false
                     }
@@ -322,11 +318,11 @@ struct AppDockItem: View {
             // Only hide if we're also not hovering over the dock item
             // Add a delay to prevent flicker when moving between dock item and preview
             hidePreviewTask = Task { @MainActor in
-                // Increased delay to allow smooth transition between dock item and preview
-                try? await Task.sleep(for: .milliseconds(5000))
-                
+                // Short delay to allow smooth transition between dock item and preview
+                try? await Task.sleep(for: .milliseconds(250))
+
                 guard !Task.isCancelled, !isHovering else { return }
-                
+
                 // Double-check both hover states before hiding
                 withAnimation(.easeOut(duration: 0.2)) {
                     showWindowPreview = false
@@ -406,18 +402,26 @@ struct AppDockItem: View {
         // Listen for drag end notification to reset state.
         // Block-based addObserver returns a token that must be used for removal.
         var token: NSObjectProtocol?
-        token = NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("DragEnded"),
-            object: nil,
-            queue: .main
-        ) { _ in
+        let cleanup: () -> Void = {
             self.isDragging = false
             if let t = token {
                 NotificationCenter.default.removeObserver(t)
                 token = nil
             }
         }
-        
+        token = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("DragEnded"),
+            object: nil,
+            queue: .main
+        ) { _ in
+            cleanup()
+        }
+        // Fallback: a cancelled drag (dropped outside any zone) never posts "DragEnded",
+        // so ensure the observer is torn down and state reset regardless.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+            cleanup()
+        }
+
         return itemProvider
     }
 }
