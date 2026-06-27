@@ -10,6 +10,7 @@ struct AppDockItem: View {
     @State private var isHovering = false
     @State private var isDragging = false
     @State private var showWindowPreview = false
+    @State private var isHoveringPreview = false
     @State private var hidePreviewTask: Task<Void, Never>?
     @State private var previewDebounceTask: Task<Void, Never>?
       
@@ -68,11 +69,21 @@ struct AppDockItem: View {
         .animation(.easeOut(duration: 0.15), value: isDragging)
         .animation(.easeOut(duration: 0.1), value: isHovering)
         .help(toolTip)
+        .onChange(of: showWindowPreview) { _, isShown in
+            // When the popover closes for any reason (including a programmatic dismiss
+            // such as clicking a window thumbnail), the inner tracking view may never
+            // emit mouseExited. Clear the preview-hover flag here so it can't stay stuck
+            // true and block all future hide tasks.
+            if !isShown {
+                isHoveringPreview = false
+            }
+        }
         .onDisappear {
             // Cancel pending work so tasks don't mutate state on a removed view.
             mouseTrackingTask?.cancel()
             previewDebounceTask?.cancel()
             hidePreviewTask?.cancel()
+            isHoveringPreview = false
         }
     }
     
@@ -296,10 +307,11 @@ struct AppDockItem: View {
                 previewDebounceTask?.cancel()
 
                 // Create a new hide task with a short delay (allows moving onto the popover)
+                hidePreviewTask?.cancel()
                 hidePreviewTask = Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(250))
 
-                    guard !Task.isCancelled, !isHovering else { return }
+                    guard !Task.isCancelled, !isHovering, !isHoveringPreview else { return }
 
                     withAnimation(.easeOut(duration: 0.1)) {
                         showWindowPreview = false
@@ -310,6 +322,10 @@ struct AppDockItem: View {
     }
     
     private func handlePreviewMouseTracking(_ isInside: Bool) {
+        // Track popover hover separately from dock-item hover so a pending dock-item
+        // exit handler can't hide the preview while the cursor is over the popover.
+        isHoveringPreview = isInside
+
         if isInside {
             // Cancel any pending hide task when entering preview
             hidePreviewTask?.cancel()
@@ -317,11 +333,12 @@ struct AppDockItem: View {
         } else {
             // Only hide if we're also not hovering over the dock item
             // Add a delay to prevent flicker when moving between dock item and preview
+            hidePreviewTask?.cancel()
             hidePreviewTask = Task { @MainActor in
                 // Short delay to allow smooth transition between dock item and preview
                 try? await Task.sleep(for: .milliseconds(250))
 
-                guard !Task.isCancelled, !isHovering else { return }
+                guard !Task.isCancelled, !isHovering, !isHoveringPreview else { return }
 
                 // Double-check both hover states before hiding
                 withAnimation(.easeOut(duration: 0.2)) {
