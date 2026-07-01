@@ -94,31 +94,35 @@ actor WindowEnumerationService {
     }
     
     /// Processes AX windows concurrently using structured concurrency.
+    /// Results are reassembled in the original `axWindows` order (not task-completion order),
+    /// so the returned list stays stable across calls instead of shuffling based on which
+    /// AX call happens to finish first each time.
     nonisolated private func processWindowsConcurrently(
         axWindows: [AXUIElement],
         cgWindowList: [[String: Any]],
         pid: pid_t,
         app: NSRunningApplication
     ) async -> [WindowInfo] {
-        return await withTaskGroup(of: WindowInfo?.self) { group in
-            for axWindow in axWindows {
+        return await withTaskGroup(of: (Int, WindowInfo?).self) { group in
+            for (index, axWindow) in axWindows.enumerated() {
                 group.addTask {
-                    await self.processSingleWindow(
+                    let window = await self.processSingleWindow(
                         axWindow: axWindow,
                         cgWindowList: cgWindowList,
                         pid: pid,
                         app: app
                     )
+                    return (index, window)
                 }
             }
-            
-            var windows: [WindowInfo] = []
-            for await window in group {
+
+            var indexedWindows: [(Int, WindowInfo)] = []
+            for await (index, window) in group {
                 if let window = window {
-                    windows.append(window)
+                    indexedWindows.append((index, window))
                 }
             }
-            return windows
+            return indexedWindows.sorted { $0.0 < $1.0 }.map { $0.1 }
         }
     }
     
