@@ -424,7 +424,7 @@ class AppManager: ObservableObject {
     
     // Public function to trigger update from outside
     func updateDockAppsIfNeeded() {
-        coordinator.scheduleUpdate(reason: "external_request")
+        coordinator.scheduleUpdate(reason: "external_request", priority: .userInitiated)
     }
     
     private func updateDockApps() {
@@ -521,7 +521,7 @@ class AppManager: ObservableObject {
         return DockApp(
             bundleIdentifier: bundleId,
             name: app.localizedName ?? bundleId,
-            icon: app.icon,
+            icon: IconCache.shared.icon(for: app),
             url: app.bundleURL,
             isPinned: pinnedBundleIdentifiers.contains(bundleId),
             runningApplication: app,
@@ -625,7 +625,7 @@ class AppManager: ObservableObject {
                    bundle.infoDictionary?["CFBundleName"] as? String ??
                    bundleId
         
-        let icon = NSWorkspace.shared.icon(forFile: appURL.path)
+        let icon = IconCache.shared.icon(forBundleId: bundleId, appURL: appURL)
         
         return DockApp(
             bundleIdentifier: bundleId,
@@ -652,7 +652,7 @@ class AppManager: ObservableObject {
                    bundle.infoDictionary?["CFBundleName"] as? String ??
                    bundleId
         
-        let icon = NSWorkspace.shared.icon(forFile: appURL.path)
+        let icon = IconCache.shared.icon(forBundleId: bundleId, appURL: appURL)
 
         let isPinned = pinnedBundleIdentifiers.contains(bundleId)
 
@@ -1005,13 +1005,13 @@ class AppManager: ObservableObject {
     func pinApp(_ app: DockApp) {
         pinnedBundleIdentifiers.insert(app.bundleIdentifier)
         savePinnedApps()
-        updateDockApps()
+        coordinator.scheduleUpdate(reason: "pin_app", priority: .userInitiated)
     }
     
     func unpinApp(_ app: DockApp) {
         pinnedBundleIdentifiers.remove(app.bundleIdentifier)
         savePinnedApps()
-        updateDockApps()
+        coordinator.scheduleUpdate(reason: "unpin_app", priority: .userInitiated)
     }
     
     // MARK: - Persistence

@@ -239,6 +239,31 @@ struct WindowPreviewView: View {
         }
     }
 
+    // Preview items render at 220pt wide; 440px covers Retina @2x. Downsampling here keeps
+    // full-window captures (which can be 5K+ wide) from holding megabytes per thumbnail.
+    static let maxPreviewPixelWidth = 440
+
+    // CoreGraphics-only, safe on background threads. Internal for unit testing.
+    static func downsampled(_ image: CGImage) -> CGImage {
+        guard image.width > maxPreviewPixelWidth else { return image }
+        let scale = CGFloat(maxPreviewPixelWidth) / CGFloat(image.width)
+        let height = max(1, Int(CGFloat(image.height) * scale))
+        guard let context = CGContext(
+            data: nil,
+            width: maxPreviewPixelWidth,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: image.colorSpace ?? CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return image
+        }
+        context.interpolationQuality = .medium
+        context.draw(image, in: CGRect(x: 0, y: 0, width: maxPreviewPixelWidth, height: height))
+        return context.makeImage() ?? image
+    }
+
     // Returns raw screenshot data captured on a background thread.
     // Must NOT touch any AppKit types (NSImage, NSColor semantic variants, NSFont, etc.).
     private static func captureWindowScreenshots(windows: [WindowInfo], app: DockApp) -> [(windowID: CGWindowID, cgImage: CGImage?, title: String, bounds: CGRect, isMinimized: Bool)] {
@@ -270,7 +295,7 @@ struct WindowPreviewView: View {
                 let title = !window.title.isEmpty && window.title != app.name ?
                     window.title : "\(app.name) - Window \(index + 1)"
                 AppLogger.shared.info("Capturing screenshot for \(app.name) window[\(index)] id=\(window.windowID)")
-                results.append((window.windowID, window.windowID.screenshot(), title, window.bounds, window.isMinimized))
+                results.append((window.windowID, window.windowID.screenshot().map(Self.downsampled), title, window.bounds, window.isMinimized))
             }
             return results
         }
@@ -293,7 +318,7 @@ struct WindowPreviewView: View {
                 windowTitle : "\(app.name) - Window \(results.count + 1)"
 
             AppLogger.shared.info("Capturing screenshot for \(app.name) cg-window id=\(windowNumber)")
-            results.append((windowNumber, windowNumber.screenshot(), finalTitle, CGRect(x: x, y: y, width: width, height: height), false))
+            results.append((windowNumber, windowNumber.screenshot().map(Self.downsampled), finalTitle, CGRect(x: x, y: y, width: width, height: height), false))
         }
 
         return results

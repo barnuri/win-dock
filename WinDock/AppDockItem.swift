@@ -7,6 +7,7 @@ struct AppDockItem: View {
     let appManager: AppManager
 
     @AppStorage("showLabels") private var showLabels = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
     @State private var isDragging = false
     @State private var showWindowPreview = false
@@ -32,7 +33,7 @@ struct AppDockItem: View {
         }
         .frame(width: 54, height: totalHeight)
         .background(backgroundStyle)
-        .scaleEffect(isDragging ? 1.05 : isHovering ? 1.02 : 1.0)
+        .scaleEffect(reduceMotion ? 1.0 : isDragging ? 1.05 : isHovering ? 1.02 : 1.0)
         .opacity(isDragging ? 0.8 : 1.0)
         .contentShape(Rectangle())
         .background(
@@ -66,9 +67,14 @@ struct AppDockItem: View {
         .onDrag {
             createDragProvider()
         }
-        .animation(.easeOut(duration: 0.15), value: isDragging)
-        .animation(.easeOut(duration: 0.1), value: isHovering)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: isDragging)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: isHovering)
         .help(toolTip)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(app.name)
+        .accessibilityValue(accessibilityStateDescription)
+        .accessibilityHint(app.isRunning ? "Activates the app. Use the shortcut menu for more actions." : "Launches the app.")
+        .accessibilityAddTraits(.isButton)
         .onChange(of: showWindowPreview) { _, isShown in
             // When the popover closes for any reason (including a programmatic dismiss
             // such as clicking a window thumbnail), the inner tracking view may never
@@ -211,23 +217,24 @@ struct AppDockItem: View {
     
     @ViewBuilder
     private var runningIndicator: some View {
-        if app.isActive {
-            Rectangle()
-                .fill(Color.blue)
-                .frame(width: iconSize * 0.6, height: 2)
-                .cornerRadius(1)
-                .padding(.top, 2)
-                .animation(.easeOut(duration: 0.2), value: app.isActive)
-        } else if app.hasWindows {
-            Circle()
-                .fill(Color.white.opacity(0.9))
-                .frame(width: 4, height: 4)
-                .overlay(
-                    Circle()
-                        .stroke(Color.black.opacity(0.2), lineWidth: 0.5)
+        // Windows 11-style indicator: a dot for running apps that springs into a wide pill
+        // when the app becomes active. One capsule so the transition animates its width.
+        if app.isActive || app.hasWindows {
+            Capsule()
+                .fill(app.isActive ? Color.blue : Color.white.opacity(0.9))
+                .frame(
+                    width: app.isActive ? iconSize * 0.6 : 4,
+                    height: app.isActive ? 3 : 4
                 )
-                .padding(.top, 0)
-                .animation(.easeOut(duration: 0.15), value: app.hasWindows)
+                .overlay(
+                    Capsule()
+                        .stroke(Color.black.opacity(app.isActive ? 0 : 0.2), lineWidth: 0.5)
+                )
+                .padding(.top, 2)
+                .animation(
+                    reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7),
+                    value: app.isActive
+                )
         }
     }
     
@@ -249,6 +256,22 @@ struct AppDockItem: View {
         let padding: CGFloat = 32
         let displayCount = min(max(app.windowCount, 1), 5)
         return CGFloat(displayCount) * itemWidth + CGFloat(max(0, displayCount - 1)) * spacing + padding
+    }
+
+    private var accessibilityStateDescription: String {
+        var parts: [String] = []
+        if app.isRunning {
+            parts.append(app.isActive ? "active" : "running")
+            if app.windowCount > 0 {
+                parts.append("\(app.windowCount) window\(app.windowCount == 1 ? "" : "s")")
+            }
+        } else {
+            parts.append("not running")
+        }
+        if app.hasNotifications && app.notificationCount > 0 {
+            parts.append("\(app.notificationCount) notification\(app.notificationCount == 1 ? "" : "s")")
+        }
+        return parts.joined(separator: ", ")
     }
 
     private var toolTip: String {

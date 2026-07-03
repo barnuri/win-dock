@@ -15,6 +15,7 @@ struct DockView: View {
     @AppStorage("showLabels") private var showLabels = false
     @AppStorage("useSmallTaskbarButtons") private var useSmallTaskbarButtons = false
     @AppStorage("taskbarTransparency") private var taskbarTransparency = 0.95
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         GeometryReader { geometry in
@@ -25,6 +26,9 @@ struct DockView: View {
     
     // Pure, cheap computation — safe to evaluate during `body`. Never mutate state here.
     private var backgroundMaterial: some ShapeStyle {
+        if reduceTransparency {
+            return AnyShapeStyle(Color(NSColor.windowBackgroundColor))
+        }
         let currentTransparency = taskbarTransparency
         if currentTransparency >= 0.95 {
             return AnyShapeStyle(.regularMaterial)
@@ -41,7 +45,7 @@ struct DockView: View {
             // Windows 11-style taskbar background with rounded corners and modern materials
             RoundedRectangle(cornerRadius: dockPosition == .bottom || dockPosition == .top ? 0 : 12)
                 .fill(backgroundMaterial)
-                .opacity(taskbarTransparency)
+                .opacity(reduceTransparency ? 1.0 : taskbarTransparency)
                 .frame(width: geometry.size.width, height: 54)
                 .overlay(
                     RoundedRectangle(cornerRadius: dockPosition == .bottom || dockPosition == .top ? 0 : 12)

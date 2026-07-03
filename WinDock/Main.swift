@@ -121,7 +121,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         setGlobalErrorHandlers()
-        
+
+        // Verify the private APIs this build links against still exist on this macOS.
+        Task.detached(priority: .utility) {
+            PrivateAPIHealthCheck.shared.run()
+        }
+
         // Initialize tracking variables
         lastDockPosition = dockPosition
         lastDockSize = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"

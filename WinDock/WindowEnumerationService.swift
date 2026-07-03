@@ -8,14 +8,25 @@ import ApplicationServices
 /// Implements 1-second caching to avoid redundant expensive operations.
 actor WindowEnumerationService {
     private var windowCache: [pid_t: CachedWindows] = [:]
-    
+    private var lastInvalidation: Date = .distantPast
+
     struct CachedWindows {
         let windows: [WindowInfo]
         let timestamp: Date
-        
-        var isValid: Bool {
-            Date().timeIntervalSince(timestamp) < 5.0
+
+        func isValid(ttl: TimeInterval) -> Bool {
+            Date().timeIntervalSince(timestamp) < ttl
         }
+    }
+
+    /// Adaptive TTL: short right after app activity (launch/quit/window churn triggers
+    /// invalidations) so the dock reacts quickly; long once the system is quiet.
+    private var adaptiveTTL: TimeInterval {
+        Self.cacheTTL(secondsSinceLastInvalidation: Date().timeIntervalSince(lastInvalidation))
+    }
+
+    static func cacheTTL(secondsSinceLastInvalidation: TimeInterval) -> TimeInterval {
+        secondsSinceLastInvalidation < 10.0 ? 1.0 : 5.0
     }
     
     public init() {}
@@ -28,7 +39,7 @@ actor WindowEnumerationService {
         let pid = app.processIdentifier
         
         // Check cache first (fast path)
-        if let cached = windowCache[pid], cached.isValid {
+        if let cached = windowCache[pid], cached.isValid(ttl: adaptiveTTL) {
             AppLogger.shared.debug("Cache hit for \(app.localizedName ?? "unknown") (pid: \(pid))")
             return cached.windows
         }
@@ -49,12 +60,14 @@ actor WindowEnumerationService {
     public func invalidateCache(for app: NSRunningApplication) {
         let pid = app.processIdentifier
         windowCache.removeValue(forKey: pid)
+        lastInvalidation = Date()
         AppLogger.shared.debug("Cache invalidated for pid: \(pid)")
     }
     
     /// Clears all cached window data.
     public func clearAllCaches() {
         windowCache.removeAll()
+        lastInvalidation = Date()
         AppLogger.shared.debug("All window caches cleared")
     }
     
