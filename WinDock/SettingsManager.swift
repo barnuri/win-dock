@@ -28,6 +28,35 @@ struct AppSettings: Codable {
     var version: String = "1.0"
 }
 
+extension AppSettings {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = AppSettings()
+        dockPosition = try container.decodeIfPresent(String.self, forKey: .dockPosition) ?? defaults.dockPosition
+        dockSize = try container.decodeIfPresent(String.self, forKey: .dockSize) ?? defaults.dockSize
+        autoHide = try container.decodeIfPresent(Bool.self, forKey: .autoHide) ?? defaults.autoHide
+        showOnAllSpaces = try container.decodeIfPresent(Bool.self, forKey: .showOnAllSpaces) ?? defaults.showOnAllSpaces
+        centerTaskbarIcons = try container.decodeIfPresent(Bool.self, forKey: .centerTaskbarIcons) ?? defaults.centerTaskbarIcons
+        showSystemTray = try container.decodeIfPresent(Bool.self, forKey: .showSystemTray) ?? defaults.showSystemTray
+        showTaskView = try container.decodeIfPresent(Bool.self, forKey: .showTaskView) ?? defaults.showTaskView
+        combineTaskbarButtons = try container.decodeIfPresent(Bool.self, forKey: .combineTaskbarButtons) ?? defaults.combineTaskbarButtons
+        useSmallTaskbarButtons = try container.decodeIfPresent(Bool.self, forKey: .useSmallTaskbarButtons) ?? defaults.useSmallTaskbarButtons
+        taskbarTransparency = try container.decodeIfPresent(Double.self, forKey: .taskbarTransparency) ?? defaults.taskbarTransparency
+        showLabels = try container.decodeIfPresent(Bool.self, forKey: .showLabels) ?? defaults.showLabels
+        animationSpeed = try container.decodeIfPresent(Double.self, forKey: .animationSpeed) ?? defaults.animationSpeed
+        use24HourClock = try container.decodeIfPresent(Bool.self, forKey: .use24HourClock) ?? defaults.use24HourClock
+        dateFormat = try container.decodeIfPresent(String.self, forKey: .dateFormat) ?? defaults.dateFormat
+        searchAppChoice = try container.decodeIfPresent(String.self, forKey: .searchAppChoice) ?? defaults.searchAppChoice
+        defaultBrowser = try container.decodeIfPresent(String.self, forKey: .defaultBrowser) ?? defaults.defaultBrowser
+        defaultTerminal = try container.decodeIfPresent(String.self, forKey: .defaultTerminal) ?? defaults.defaultTerminal
+        logLevel = try container.decodeIfPresent(String.self, forKey: .logLevel) ?? defaults.logLevel
+        notificationPositionEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationPositionEnabled) ?? defaults.notificationPositionEnabled
+        notificationPosition = try container.decodeIfPresent(String.self, forKey: .notificationPosition) ?? defaults.notificationPosition
+        exportDate = try container.decodeIfPresent(Date.self, forKey: .exportDate) ?? defaults.exportDate
+        version = try container.decodeIfPresent(String.self, forKey: .version) ?? defaults.version
+    }
+}
+
 class SettingsManager: ObservableObject {
     @Published var exportStatus: String?
     @Published var importStatus: String?
@@ -40,16 +69,16 @@ class SettingsManager: ObservableObject {
             dockPosition: userDefaults.string(forKey: "dockPosition") ?? "bottom",
             dockSize: userDefaults.string(forKey: "dockSize") ?? "large",
             autoHide: userDefaults.bool(forKey: "autoHide"),
-            showOnAllSpaces: userDefaults.bool(forKey: "showOnAllSpaces"),
-            centerTaskbarIcons: userDefaults.bool(forKey: "centerTaskbarIcons"),
-            showSystemTray: userDefaults.bool(forKey: "showSystemTray"),
-            showTaskView: userDefaults.bool(forKey: "showTaskView"),
-            combineTaskbarButtons: userDefaults.bool(forKey: "combineTaskbarButtons"),
+            showOnAllSpaces: userDefaults.object(forKey: "showOnAllSpaces") != nil ? userDefaults.bool(forKey: "showOnAllSpaces") : true,
+            centerTaskbarIcons: userDefaults.object(forKey: "centerTaskbarIcons") != nil ? userDefaults.bool(forKey: "centerTaskbarIcons") : true,
+            showSystemTray: userDefaults.object(forKey: "showSystemTray") != nil ? userDefaults.bool(forKey: "showSystemTray") : true,
+            showTaskView: userDefaults.object(forKey: "showTaskView") != nil ? userDefaults.bool(forKey: "showTaskView") : true,
+            combineTaskbarButtons: userDefaults.object(forKey: "combineTaskbarButtons") != nil ? userDefaults.bool(forKey: "combineTaskbarButtons") : true,
             useSmallTaskbarButtons: userDefaults.bool(forKey: "useSmallTaskbarButtons"),
             taskbarTransparency: userDefaults.object(forKey: "taskbarTransparency") != nil ? userDefaults.double(forKey: "taskbarTransparency") : 0.95,
             showLabels: userDefaults.bool(forKey: "showLabels"),
             animationSpeed: userDefaults.object(forKey: "animationSpeed") != nil ? userDefaults.double(forKey: "animationSpeed") : 1.0,
-            use24HourClock: userDefaults.bool(forKey: "use24HourClock"),
+            use24HourClock: userDefaults.object(forKey: "use24HourClock") != nil ? userDefaults.bool(forKey: "use24HourClock") : true,
             dateFormat: userDefaults.string(forKey: "dateFormat") ?? "dd/MM/yyyy",
             searchAppChoice: userDefaults.string(forKey: "searchAppChoice") ?? "spotlight",
             defaultBrowser: userDefaults.string(forKey: "defaultBrowser") ?? "com.apple.Safari",

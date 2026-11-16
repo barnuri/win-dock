@@ -8,6 +8,9 @@ class FullscreenDetectionManager: ObservableObject {
     private var monitoringTimer: Timer?
     private var isRunning = false
     private var startupTime: Date?
+    private var monitoringGeneration = 0
+    private static let maxDisplayCount: UInt32 = 32
+    private static let boundsTolerance: CGFloat = 2
     
     private init() {}
     
@@ -16,11 +19,14 @@ class FullscreenDetectionManager: ObservableObject {
         
         isRunning = true
         startupTime = Date()
+        monitoringGeneration += 1
+        let generation = monitoringGeneration
         
         // Add delay to prevent false positives during startup
         DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
-            guard let self = self, self.isRunning else { return }
+            guard let self = self, self.isRunning, self.monitoringGeneration == generation else { return }
             // Low-frequency safety poll; space/activation notifications below drive prompt updates.
+            self.monitoringTimer?.invalidate()
             self.monitoringTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
                 self?.checkForFullscreenWindows()
             }
@@ -86,10 +92,8 @@ class FullscreenDetectionManager: ObservableObject {
             return
         }
 
-        // NSScreen must be read on the main thread; the window scan runs off-main.
-        guard let screenBounds = NSScreen.main?.frame else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let detected = Self.detectFullscreenWindow(screenBounds: screenBounds)
+            let detected = Self.detectFullscreenWindow(displayBounds: Self.activeDisplayBounds())
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 let previousState = self.hasFullscreenWindow
@@ -105,24 +109,33 @@ class FullscreenDetectionManager: ObservableObject {
         }
     }
 
-    private static func detectFullscreenWindow(screenBounds: CGRect) -> Bool {
+    private static func activeDisplayBounds() -> [CGRect] {
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(maxDisplayCount))
+        var displayCount: UInt32 = 0
+        guard CGGetActiveDisplayList(maxDisplayCount, &displayIDs, &displayCount) == .success else {
+            return []
+        }
+        return displayIDs.prefix(Int(displayCount)).map { CGDisplayBounds($0) }
+    }
+
+    static func windowMatchesAnyDisplay(_ windowBounds: CGRect, displayBounds: [CGRect]) -> Bool {
+        displayBounds.contains { display in
+            abs(windowBounds.width - display.width) <= boundsTolerance &&
+                abs(windowBounds.height - display.height) <= boundsTolerance &&
+                abs(windowBounds.origin.x - display.origin.x) <= boundsTolerance &&
+                abs(windowBounds.origin.y - display.origin.y) <= boundsTolerance
+        }
+    }
+
+    private static func detectFullscreenWindow(displayBounds: [CGRect]) -> Bool {
+        guard !displayBounds.isEmpty else { return false }
+
         // Get all on-screen windows
         guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
             return false
         }
 
         for windowInfo in windowList {
-            // Skip WinDock itself and non-regular apps
-            if let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
-               let app = NSRunningApplication(processIdentifier: ownerPID) {
-                if app.bundleIdentifier == Bundle.main.bundleIdentifier {
-                    continue
-                }
-                if app.activationPolicy != .regular {
-                    continue
-                }
-            }
-
             // Check window layer - skip non-main windows (docks, menus, etc.)
             guard let layer = windowInfo[kCGWindowLayer as String] as? Int,
                   layer == 0 else {
@@ -143,21 +156,22 @@ class FullscreenDetectionManager: ObservableObject {
                 continue
             }
 
-            // More strict fullscreen detection - must cover exactly the entire screen
-            let tolerance: CGFloat = 2
-            let coversWidth = abs(bounds.width - screenBounds.width) <= tolerance
-            let coversHeight = abs(bounds.height - screenBounds.height) <= tolerance
-            let positionedAtOrigin = abs(bounds.origin.x - screenBounds.origin.x) <= tolerance &&
-                                   abs(bounds.origin.y - screenBounds.origin.y) <= tolerance
-
-            if coversWidth && coversHeight && positionedAtOrigin {
-                // Additional check: get window name to avoid false positives
-                if let windowName = windowInfo[kCGWindowName as String] as? String,
-                   !windowName.isEmpty {
-                    AppLogger.shared.info("Detected fullscreen window: \(windowName)")
-                    return true
-                }
+            // Window and display bounds are both in CG global coordinates (top-left origin)
+            guard windowMatchesAnyDisplay(bounds, displayBounds: displayBounds),
+                  let windowName = windowInfo[kCGWindowName as String] as? String,
+                  !windowName.isEmpty else {
+                continue
             }
+
+            // NSRunningApplication lookup is an IPC round-trip, so it runs only for candidates.
+            if let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? Int32,
+               let app = NSRunningApplication(processIdentifier: ownerPID),
+               app.bundleIdentifier == Bundle.main.bundleIdentifier || app.activationPolicy != .regular {
+                continue
+            }
+
+            AppLogger.shared.info("Detected fullscreen window: \(windowName)")
+            return true
         }
 
         return false

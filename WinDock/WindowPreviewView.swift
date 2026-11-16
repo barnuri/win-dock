@@ -300,13 +300,14 @@ struct WindowPreviewView: View {
             return results
         }
 
-        guard app.isRunning, let runningApp = app.runningApplication else { return results }
+        let appPIDs = Set(app.processes.map(\.processIdentifier))
+        guard !appPIDs.isEmpty else { return results }
 
         let windowList = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
         for windowInfo in windowList {
             guard results.count < 10,
                   let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
-                  pid == runningApp.processIdentifier,
+                  appPIDs.contains(pid),
                   let windowNumber = windowInfo[kCGWindowNumber as String] as? CGWindowID,
                   let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: Any],
                   let x = boundsDict["X"] as? CGFloat, let y = boundsDict["Y"] as? CGFloat,

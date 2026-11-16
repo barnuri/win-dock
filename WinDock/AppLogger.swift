@@ -67,6 +67,7 @@ final class AppLogger {
     // Configuration
     private let enableConsoleLogs = true
     private let maxLogFileSizeBytes = 10 * 1024 * 1024 // 10 MB
+    private let maxBackupsPerLog = 3
     private var minimumLogLevel: LogLevel {
         let levelString = UserDefaults.standard.string(forKey: "logLevel") ?? "info"
         return LogLevel(rawValue: levelString.uppercased()) ?? .info
@@ -196,18 +197,27 @@ final class AppLogger {
     /// Appends data using a cached, persistent FileHandle. Must be called on `logQueue`.
     private func appendToFile(_ data: Data, fileURL: URL) {
         if let handle = fileHandles[fileURL.path] {
-            handle.seekToEndOfFile()
-            handle.write(data)
-            return
+            do {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+                return
+            } catch {
+                // Drop the failed handle and retry once with a fresh one below.
+                closeHandle(for: fileURL)
+            }
         }
 
         if !FileManager.default.fileExists(atPath: fileURL.path) {
             FileManager.default.createFile(atPath: fileURL.path, contents: nil)
         }
         guard let handle = try? FileHandle(forWritingTo: fileURL) else { return }
-        handle.seekToEndOfFile()
-        handle.write(data)
-        fileHandles[fileURL.path] = handle
+        do {
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+            fileHandles[fileURL.path] = handle
+        } catch {
+            try? handle.close()
+        }
     }
 
     /// Closes and forgets the cached handle for a file (call before moving/replacing it).
@@ -249,6 +259,8 @@ final class AppLogger {
                 // Create a new empty log file
                 try Data().write(to: fileURL)
 
+                pruneOldBackups(of: fileURL)
+
                 info("Log rotated: \(fileURL.lastPathComponent) -> \(backupURL.lastPathComponent)")
             }
         } catch {
@@ -256,6 +268,37 @@ final class AppLogger {
         }
     }
     
+    private func pruneOldBackups(of fileURL: URL) {
+        let fileManager = FileManager.default
+        let directory = fileURL.deletingLastPathComponent()
+        guard let fileNames = try? fileManager.contentsOfDirectory(atPath: directory.path) else { return }
+
+        let baseName = fileURL.deletingPathExtension().lastPathComponent
+        for fileName in AppLogger.backupsToPrune(fileNames: fileNames, baseName: baseName, keep: maxBackupsPerLog) {
+            try? fileManager.removeItem(at: directory.appendingPathComponent(fileName))
+        }
+    }
+
+    /// Returns the `<baseName>.<epoch>.log` backups beyond the newest `keep`.
+    static func backupsToPrune(fileNames: [String], baseName: String, keep: Int) -> [String] {
+        let prefix = baseName + "."
+        let suffix = ".log"
+        let backups: [(name: String, epoch: Int)] = fileNames.compactMap { name in
+            guard name.hasPrefix(prefix), name.hasSuffix(suffix), name.count > prefix.count + suffix.count else {
+                return nil
+            }
+            let stamp = name.dropFirst(prefix.count).dropLast(suffix.count)
+            guard stamp.allSatisfy({ $0.isASCII && $0.isNumber }), let epoch = Int(stamp) else {
+                return nil
+            }
+            return (name, epoch)
+        }
+        return backups
+            .sorted { $0.epoch > $1.epoch }
+            .dropFirst(max(keep, 0))
+            .map { $0.name }
+    }
+
     private func showNotificationIfNeeded(message: String) {
         DispatchQueue.main.async {
             // Use NSSound since it's universally available

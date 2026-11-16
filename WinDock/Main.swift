@@ -109,17 +109,21 @@ struct Main: App {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var dockWindows: [DockWindow] = []
     var statusBarItem: NSStatusItem?
     @AppStorage("dockPosition") var dockPosition: DockPosition = .bottom
+    @AppStorage("showOnAllSpaces") private var showOnAllSpaces = true
     private var isUpdatingDockWindows = false
     private var lastDockPosition: DockPosition = .bottom
     private var lastDockSize: String = "medium"
     private var lastPaddingVertical: Double = 0.0
     private var lastPaddingHorizontal: Double = 0.0
+    private var lastShowOnAllSpaces = true
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // As the unit-test host, don't put a second live taskbar on screen next to the user's.
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         setGlobalErrorHandlers()
 
         // Verify the private APIs this build links against still exist on this macOS.
@@ -132,6 +136,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         lastDockSize = UserDefaults.standard.string(forKey: "dockSize") ?? "medium"
         lastPaddingVertical = UserDefaults.standard.double(forKey: "paddingVertical")
         lastPaddingHorizontal = UserDefaults.standard.double(forKey: "paddingHorizontal")
+        lastShowOnAllSpaces = showOnAllSpaces
         
         // Start background update manager for real-time clock and system info
         Task { @MainActor in
@@ -514,9 +519,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Small delay to ensure windows are fully closed
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            // Create a DockWindow for each screen
-            for screen in NSScreen.screens {
-                let dockWindow = DockWindow()
+            let targetScreens = self.showOnAllSpaces ? NSScreen.screens : Array(NSScreen.screens.prefix(1))
+            for screen in targetScreens {
+                let dockWindow = DockWindow(screen: screen)
                 let frame = dockFrame(for: self.dockPosition, screen: screen)
                 dockWindow.setFrame(frame, display: true)
                 dockWindow.show()
@@ -531,6 +536,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         dockPosition = newPosition
         setupDockWindowsForAllScreens()
         setupStatusBarItem() // update menu checkmarks
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(changeDockPosition(_:)) {
+            menuItem.state = (menuItem.representedObject as? String) == dockPosition.rawValue ? .on : .off
+        }
+        return true
     }
 
     @objc private func changeDockPosition(_ sender: NSMenuItem) {
@@ -552,9 +564,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if dockPosition != lastDockPosition || 
            currentDockSize != lastDockSize ||
            currentPaddingVertical != lastPaddingVertical ||
-           currentPaddingHorizontal != lastPaddingHorizontal {
+           currentPaddingHorizontal != lastPaddingHorizontal ||
+           showOnAllSpaces != lastShowOnAllSpaces {
             
             lastDockPosition = dockPosition
+            lastShowOnAllSpaces = showOnAllSpaces
             lastDockSize = currentDockSize
             lastPaddingVertical = currentPaddingVertical
             lastPaddingHorizontal = currentPaddingHorizontal

@@ -19,7 +19,6 @@ class DockWindow: NSPanel {
     private var windowObserver: NSObjectProtocol?
     @AppStorage("dockSize") private var dockSize: DockSize = .medium
     @AppStorage("autoHide") private var autoHide = false
-    @AppStorage("showOnAllSpaces") private var showOnAllSpaces = true
     @AppStorage("centerTaskbarIcons") private var centerTaskbarIcons = true
     @AppStorage("showSystemTray") private var showSystemTray = true
     @AppStorage("showTaskView") private var showTaskView = true
@@ -31,12 +30,19 @@ class DockWindow: NSPanel {
     private var cancellables = Set<AnyCancellable>()
     private let fullscreenManager = FullscreenDetectionManager.shared
     private let visibilityManager = DockVisibilityManager.shared
+    private var targetDisplayID: CGDirectDisplayID?
+
+    private var targetScreen: NSScreen? {
+        let matchingScreen = NSScreen.screens.first { DockWindow.displayID(of: $0) == targetDisplayID }
+        return matchingScreen ?? screen ?? NSScreen.main
+    }
     
-    convenience init() {
+    convenience init(screen: NSScreen? = nil) {
         self.init(contentRect: NSRect(x: 0, y: 0, width: 100, height: 60),
                   styleMask: [.borderless, .nonactivatingPanel],
                   backing: .buffered,
                   defer: false)
+        targetDisplayID = screen.flatMap { DockWindow.displayID(of: $0) }
         if !isPreview {
             setup()
         }
@@ -68,8 +74,7 @@ class DockWindow: NSPanel {
         // Set a proper window title for app switcher
         self.title = "WinDock Taskbar"
 
-        // Set initial alpha value - always start visible
-        alphaValue = 1.0
+        alphaValue = visibilityManager.isVisible ? 1.0 : 0.0
         
         updatePosition()
         appManager.startMonitoring()
@@ -135,7 +140,7 @@ class DockWindow: NSPanel {
     
     private func handleAutoHideSettingChange() {
         // If auto-hide is off, ensure the dock is fully visible
-        if !autoHide && alphaValue < 1.0 {
+        if !autoHide && visibilityManager.isVisible && alphaValue < 1.0 {
             hideTimer?.invalidate()
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.2
@@ -150,8 +155,8 @@ class DockWindow: NSPanel {
         }
         
         trackingArea = NSTrackingArea(
-            rect: contentView?.bounds ?? .zero,
-            options: [.mouseEnteredAndExited, .activeAlways],
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -247,7 +252,7 @@ class DockWindow: NSPanel {
     
     private func updatePosition() {
         guard let appDelegate = NSApp.delegate as? AppDelegate,
-              let screen = showOnAllSpaces ? NSScreen.main : NSScreen.screens.first else { return }
+              let screen = targetScreen else { return }
         let newFrame = dockFrame(for: appDelegate.dockPosition, screen: screen)
         setFrame(newFrame, display: true, animate: false)
         
@@ -266,6 +271,10 @@ class DockWindow: NSPanel {
         }
         
         setupTrackingArea()
+    }
+    
+    private static func displayID(of screen: NSScreen) -> CGDirectDisplayID? {
+        screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
     }
     
     func cleanup() {

@@ -37,9 +37,10 @@ struct AppDockItem: View {
         .opacity(isDragging ? 0.8 : 1.0)
         .contentShape(Rectangle())
         .background(
-            MouseTrackingView { isInside in
-                handleMouseTracking(isInside)
-            }
+            MouseTrackingView(
+                onMouseChange: { isInside in handleMouseTracking(isInside) },
+                onClick: { clickCount in handleClick(clickCount: clickCount) }
+            )
         )
         .popover(isPresented: $showWindowPreview, arrowEdge: .top) {
             WindowPreviewView(app: app, appManager: appManager)
@@ -53,17 +54,9 @@ struct AppDockItem: View {
                     }
                 )
         }
-        .onTapGesture(perform: handleTap)
         .contextMenu {
             AppContextMenuView(app: app, appManager: appManager)
         }
-        .simultaneousGesture(
-            TapGesture(count: 2).onEnded { _ in
-                if app.isRunning {
-                    appManager.launchNewInstance(app)
-                }
-            }
-        )
         .onDrag {
             createDragProvider()
         }
@@ -75,6 +68,7 @@ struct AppDockItem: View {
         .accessibilityValue(accessibilityStateDescription)
         .accessibilityHint(app.isRunning ? "Activates the app. Use the shortcut menu for more actions." : "Launches the app.")
         .accessibilityAddTraits(.isButton)
+        .accessibilityAction { handleTap() }
         .onChange(of: showWindowPreview) { _, isShown in
             // When the popover closes for any reason (including a programmatic dismiss
             // such as clicking a window thumbnail), the inner tracking view may never
@@ -371,6 +365,21 @@ struct AppDockItem: View {
         }
     }
     
+    private func handleClick(clickCount: Int) {
+        // A cancelled drag never posts "DragEnded"; a real click proves the drag is over.
+        isDragging = false
+        if clickCount == 2 {
+            if app.isRunning {
+                appManager.launchNewInstance(app)
+            }
+            return
+        }
+        // Synthetic clicks from automation tools can report a click count of 0.
+        guard clickCount <= 1 else { return }
+        previewDebounceTask?.cancel()
+        handleTap()
+    }
+
     private func handleTap() {
         if !app.isRunning {
             AppLogger.shared.info("AppDockItem handleTap for \(app.name), runningApplication is nil")
@@ -378,6 +387,13 @@ struct AppDockItem: View {
             return
         }
         
+        // A running app with no windows needs a reopen request, like the system Dock sends.
+        if app.windows.isEmpty {
+            AppLogger.shared.info("AppDockItem handleTap for \(app.name), no windows - reopening")
+            appManager.activateApp(app)
+            return
+        }
+
         // If app has multiple windows, show preview
         if app.windowCount > 1 {
             AppLogger.shared.info("AppDockItem handleTap for \(app.name), windowCount > 1")
@@ -386,7 +402,7 @@ struct AppDockItem: View {
         }
 
         // If app is not active, activate it (brings windows to front)
-        if !app.isActive {
+        if !appManager.wasFrontmostBeforeDockClick(app) {
             AppLogger.shared.info("AppDockItem handleTap for \(app.name), not active - activating")
             appManager.activateApp(app)
             return
@@ -470,23 +486,70 @@ struct AppDockItem: View {
 
 struct MouseTrackingView: NSViewRepresentable {
     let onMouseChange: (Bool) -> Void
+    var onClick: ((Int) -> Void)? = nil
     
     func makeNSView(context: Context) -> NSView {
         let view = TrackingNSView()
         view.onMouseChange = onMouseChange
+        view.onClick = onClick
         return view
     }
     
     func updateNSView(_ nsView: NSView, context: Context) {
         if let trackingView = nsView as? TrackingNSView {
             trackingView.onMouseChange = onMouseChange
+            trackingView.onClick = onClick
         }
     }
 }
 
 class TrackingNSView: NSView {
     var onMouseChange: ((Bool) -> Void)?
+    var onClick: ((Int) -> Void)?
     private var trackingArea: NSTrackingArea?
+    private var clickMonitor: Any?
+    /// Where the current press started inside this view; nil when it started elsewhere.
+    private var mouseDownLocation: NSPoint?
+    private static let maxClickTravel: CGFloat = 4
+
+    // Never take clicks from the SwiftUI content above this background view.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    // A local monitor still sees the click when an open preview popover consumes it to dismiss itself.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        removeClickMonitor()
+        guard window != nil else { return }
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] event in
+            self?.handleMouseEvent(event)
+            return event
+        }
+    }
+
+    /// Counts a click only when the press and release both land inside this view without a drag between them.
+    private func handleMouseEvent(_ event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let isInside = event.window === window && bounds.contains(point)
+        if event.type == .leftMouseDown {
+            mouseDownLocation = isInside ? point : nil
+            return
+        }
+        defer { mouseDownLocation = nil }
+        guard let onClick, isInside, let downLocation = mouseDownLocation,
+              hypot(point.x - downLocation.x, point.y - downLocation.y) <= Self.maxClickTravel else { return }
+        onClick(event.clickCount)
+    }
+
+    private func removeClickMonitor() {
+        if let clickMonitor {
+            NSEvent.removeMonitor(clickMonitor)
+        }
+        clickMonitor = nil
+    }
+
+    deinit {
+        removeClickMonitor()
+    }
     
     override func updateTrackingAreas() {
         super.updateTrackingAreas()

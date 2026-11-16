@@ -274,7 +274,7 @@ struct GeneralSettingsTab: View {
             """
         ]
         
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.main.async {
             var permissionTriggered = false
             
             for (index, script) in scripts.enumerated() {
@@ -314,9 +314,6 @@ struct GeneralSettingsTab: View {
                         return
                     }
                 }
-                
-                // Small delay between attempts
-                Thread.sleep(forTimeInterval: 0.5)
             }
             
             DispatchQueue.main.async {
@@ -360,7 +357,7 @@ struct GeneralSettingsTab: View {
         end tell
         """
         
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.main.async {
             if let appleScript = NSAppleScript(source: testScript) {
                 var error: NSDictionary?
                 appleScript.executeAndReturnError(&error)
@@ -490,7 +487,7 @@ struct GeneralSettingsTab: View {
 struct AppearanceSettingsTab: View {
     @AppStorage("combineTaskbarButtons") private var combineTaskbarButtons = true
     @AppStorage("useSmallTaskbarButtons") private var useSmallTaskbarButtons = false
-    @AppStorage("taskbarTransparency") private var taskbarTransparency = 1.0
+    @AppStorage("taskbarTransparency") private var taskbarTransparency = 0.95
     @AppStorage("showLabels") private var showLabels = false
     @AppStorage("animationSpeed") private var animationSpeed = 1.0
     @AppStorage("themeMode") private var themeMode = "auto"

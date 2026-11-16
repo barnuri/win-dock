@@ -8,32 +8,24 @@ import Network
 class BackgroundUpdateManager: ObservableObject {
     static let shared = BackgroundUpdateManager()
     
-    @Published var currentTime = Date()
     @Published var batteryInfo = BatteryInfo()
     @Published var networkInfo = NetworkInfo()
     
     private var cancellables = Set<AnyCancellable>()
     private let backgroundQueue = DispatchQueue(label: "background.updates", qos: .utility)
+    private var isStarted = false
     
     private init() {
         startBackgroundUpdates()
     }
     
     func startBackgroundUpdates() {
+        guard !isStarted else {
+            return
+        }
+        isStarted = true
+
         AppLogger.shared.info("BackgroundUpdateManager: Starting background updates")
-        
-        // Use more efficient time updates - only update when second changes
-        Timer.publish(every: 1, on: .main, in: .common)
-            .autoconnect()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] newTime in
-                guard let self = self else { return }
-                // Only update if the second actually changed to prevent unnecessary updates
-                if Calendar.current.component(.second, from: self.currentTime) != Calendar.current.component(.second, from: newTime) {
-                    self.currentTime = newTime
-                }
-            }
-            .store(in: &cancellables)
         
         // Update battery info on background queue every 30 seconds
         Timer.publish(every: 30, on: .main, in: .common)
@@ -54,7 +46,6 @@ class BackgroundUpdateManager: ObservableObject {
         networkInfo.start()
         
         // Initial updates
-        currentTime = Date()
         backgroundQueue.async { [weak self] in
             guard let self = self else { return }
             var batteryInfo = BatteryInfo()
@@ -73,6 +64,7 @@ class BackgroundUpdateManager: ObservableObject {
         
         cancellables.removeAll()
         networkInfo.stop()
+        isStarted = false
         
         AppLogger.shared.info("BackgroundUpdateManager: Background updates stopped")
     }

@@ -8,6 +8,8 @@ import ApplicationServices
 /// Implements 1-second caching to avoid redundant expensive operations.
 actor WindowEnumerationService {
     private var windowCache: [pid_t: CachedWindows] = [:]
+    private var cacheGenerations: [pid_t: Int] = [:]
+    private var globalGeneration: Int = 0
     private var lastInvalidation: Date = .distantPast
 
     struct CachedWindows {
@@ -47,9 +49,13 @@ actor WindowEnumerationService {
         // Cache miss or expired - enumerate windows in background
         AppLogger.shared.debug("Cache miss for \(app.localizedName ?? "unknown") (pid: \(pid)) - enumerating windows")
         
+        let generation = cacheGeneration(for: pid)
         let windows = await enumerateWindowsInBackground(pid: pid, app: app)
         
-        // Cache the result
+        // Skip caching if the cache was invalidated while enumerating (actor reentrancy)
+        guard cacheGeneration(for: pid) == generation else {
+            return windows
+        }
         windowCache[pid] = CachedWindows(windows: windows, timestamp: Date())
         
         return windows
@@ -60,6 +66,7 @@ actor WindowEnumerationService {
     public func invalidateCache(for app: NSRunningApplication) {
         let pid = app.processIdentifier
         windowCache.removeValue(forKey: pid)
+        cacheGenerations[pid, default: 0] += 1
         lastInvalidation = Date()
         AppLogger.shared.debug("Cache invalidated for pid: \(pid)")
     }
@@ -67,11 +74,16 @@ actor WindowEnumerationService {
     /// Clears all cached window data.
     public func clearAllCaches() {
         windowCache.removeAll()
+        globalGeneration += 1
         lastInvalidation = Date()
         AppLogger.shared.debug("All window caches cleared")
     }
     
     // MARK: - Private Implementation
+
+    private func cacheGeneration(for pid: pid_t) -> Int {
+        globalGeneration + cacheGenerations[pid, default: 0]
+    }
     
     /// Enumerates windows in a background task to avoid main thread blocking.
     private func enumerateWindowsInBackground(pid: pid_t, app: NSRunningApplication) async -> [WindowInfo] {

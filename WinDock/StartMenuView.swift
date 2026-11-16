@@ -324,7 +324,7 @@ struct StartMenuView: View {
     private func openMissionControl() {
         let script = """
         tell application "System Events"
-            key code 131 using {control down}
+            key code 126 using {control down}
         end tell
         """
         executeAppleScript(script)

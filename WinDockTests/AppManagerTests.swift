@@ -189,4 +189,36 @@ final class AppManagerTests: XCTestCase {
             XCTAssertTrue(testApp.isMinimized)
         }
     }
+
+    func testGroupedByBundleIDKeepsEveryProcessOfTheSameBundle() {
+        let processes = [("com.google.Chrome", 840), ("com.apple.finder", 1), ("com.google.Chrome", 46401)]
+
+        let groups = AppManager.groupedByBundleID(processes, bundleID: { $0.0 })
+
+        XCTAssertEqual(groups.map(\.bundleID), ["com.google.Chrome", "com.apple.finder"])
+        XCTAssertEqual(groups[0].items.map(\.1), [840, 46401])
+        XCTAssertEqual(groups[1].items.map(\.1), [1])
+    }
+
+    func testGroupedByBundleIDSkipsItemsWithoutBundleID() {
+        let groups = AppManager.groupedByBundleID([nil, "com.test.app"], bundleID: { $0 })
+
+        XCTAssertEqual(groups.map(\.bundleID), ["com.test.app"])
+    }
+
+    func testDockAppProcessesIncludePrimaryAndAdditional() {
+        let running = NSWorkspace.shared.runningApplications.prefix(2)
+        guard running.count == 2 else { return }
+        let app = DockApp(
+            bundleIdentifier: "com.test.app",
+            name: "Test App",
+            icon: nil,
+            url: nil,
+            isPinned: false,
+            runningApplication: running.first,
+            additionalProcesses: [running.last!]
+        )
+
+        XCTAssertEqual(app.processes.map(\.processIdentifier), running.map(\.processIdentifier))
+    }
 }

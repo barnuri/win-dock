@@ -33,6 +33,8 @@ class NotificationPositionManager: NSObject, ObservableObject {
     private let notificationCenterBundleID: String = "com.apple.notificationcenterui"
     private let paddingAboveDock: CGFloat = 30
     private var axObserver: AXObserver?
+    private var observedApp: AXUIElement?
+    private var observerRunLoop: CFRunLoop?
     private let logger: Logger = .init(subsystem: "com.windock.NotificationPositionManager", category: "NotificationPositionManager")
     
     private var cachedInitialPosition: CGPoint?
@@ -86,6 +88,7 @@ class NotificationPositionManager: NSObject, ObservableObject {
     }
     
     private func setupObserver() {
+        stopObserver()
         guard isEnabled else { return }
         
         guard checkAccessibilityPermissions() else {
@@ -112,6 +115,7 @@ class NotificationPositionManager: NSObject, ObservableObject {
         }
         
         axObserver = observer
+        observedApp = app
 
         // Safe to use passUnretained since NotificationPositionManager is a singleton that never deallocates
         let selfPtr: UnsafeMutableRawPointer = Unmanaged.passUnretained(self).toOpaque()
@@ -123,7 +127,9 @@ class NotificationPositionManager: NSObject, ObservableObject {
             return
         }
         
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer), .defaultMode)
+        let runLoop: CFRunLoop = CFRunLoopGetCurrent()
+        CFRunLoopAddSource(runLoop, AXObserverGetRunLoopSource(observer), .defaultMode)
+        observerRunLoop = runLoop
         
         lastError = nil
         debugLog("Observer setup complete for Notification Center (PID: \(pid))")
@@ -138,9 +144,19 @@ class NotificationPositionManager: NSObject, ObservableObject {
     }
     
     private func stopObserver() {
-        axObserver = nil
         widgetMonitorTimer?.invalidate()
         widgetMonitorTimer = nil
+        if let observer = axObserver {
+            if let app = observedApp {
+                AXObserverRemoveNotification(observer, app, kAXWindowCreatedNotification as CFString)
+            }
+            if let runLoop = observerRunLoop {
+                CFRunLoopRemoveSource(runLoop, AXObserverGetRunLoopSource(observer), .defaultMode)
+            }
+        }
+        axObserver = nil
+        observedApp = nil
+        observerRunLoop = nil
         cachedInitialPosition = nil
         cachedInitialWindowSize = nil
         cachedInitialNotifSize = nil

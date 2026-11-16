@@ -23,6 +23,11 @@ class WindowsResizeManager: ObservableObject {
     private var dockAreas: [NSScreen: CGRect] = [:]
     private var dockPosition: DockPosition = .bottom
     private var monitoringTimer: Timer?
+    /// Frames we tried to move a window away from, with the attempt count. After
+    /// `maxAdjustmentAttempts` the app is assumed to snap it back, so we stop retrying.
+    private var rejectedAdjustments: [CGWindowID: (frame: CGRect, attempts: Int)] = [:]
+    private static let maxAdjustmentAttempts = 3
+    private static let minimumWindowSize = CGSize(width: 100, height: 50)
     
     // References to other managers for state checking
     private let fullscreenManager = FullscreenDetectionManager.shared
@@ -78,6 +83,27 @@ class WindowsResizeManager: ObservableObject {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+        notificationCenter.addObserver(
+            self,
+            selector: #selector(userDefaultsChanged),
+            name: UserDefaults.didChangeNotification,
+            object: nil
+        )
+    }
+
+    @objc private func userDefaultsChanged() {
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshDockAreasIfChanged()
+        }
+    }
+
+    private func refreshDockAreasIfChanged() {
+        let positionRaw = UserDefaults.standard.string(forKey: "dockPosition") ?? "bottom"
+        let newAreas = Dictionary(uniqueKeysWithValues: NSScreen.screens.map {
+            ($0, dockFrame(for: DockPosition(rawValue: positionRaw) ?? .bottom, screen: $0))
+        })
+        guard newAreas != dockAreas else { return }
+        updateDockAreaFromSettings()
     }
 
     @objc private func dockSettingsChanged() {
@@ -110,6 +136,7 @@ class WindowsResizeManager: ObservableObject {
         dockPosition = DockPosition(rawValue: dockPositionStr) ?? .bottom
 
         dockAreas.removeAll()
+        rejectedAdjustments.removeAll()
         for (index, screen) in NSScreen.screens.enumerated() {
             let dockArea = dockFrame(for: dockPosition, screen: screen)
             dockAreas[screen] = dockArea
@@ -174,22 +201,20 @@ class WindowsResizeManager: ObservableObject {
             return
         }
 
-        let filteredWindows = windowList.compactMap { windowInfo -> (windowInfo: [String: Any], pid: pid_t, windowFrame: CGRect, app: NSRunningApplication)? in
+        let filteredWindows = windowList.compactMap { windowInfo -> (windowInfo: [String: Any], pid: pid_t, windowFrame: CGRect)? in
             guard
                 let pid = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
                 let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
                 let windowFrame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
-                let app = NSRunningApplication(processIdentifier: pid),
-                app.activationPolicy == .regular,
-                app.bundleIdentifier != Bundle.main.bundleIdentifier,
-                !app.isTerminated,
-                !app.isHidden,
                 windowInfo[kCGWindowIsOnscreen as String] as? Bool == true,
-                windowInfo[kCGWindowLayer as String] as? Int == 0
+                windowInfo[kCGWindowLayer as String] as? Int == 0,
+                windowFrame.width > Self.minimumWindowSize.width,
+                windowFrame.height > Self.minimumWindowSize.height
             else { return nil }
-            return (windowInfo, pid, windowFrame, app)
+            return (windowInfo, pid, windowFrame)
         }
         guard !filteredWindows.isEmpty else { return }
+        pruneRejectedAdjustments(liveWindowFrames: windowFrames(in: windowList))
 
         // dockAreas come from dockFrame() which uses NSScreen.visibleFrame — AppKit coords
         // (origin at bottom-left of main screen, Y increases upward).
@@ -208,7 +233,11 @@ class WindowsResizeManager: ObservableObject {
 
         for filteredWindow in filteredWindows {
             let windowFrame = filteredWindow.windowFrame  // CG coords
-            let app = filteredWindow.app
+            let windowID = filteredWindow.windowInfo[kCGWindowNumber as String] as? CGWindowID ?? 0
+            if let rejected = rejectedAdjustments[windowID], rejected.frame == windowFrame,
+               rejected.attempts >= Self.maxAdjustmentAttempts {
+                continue
+            }
 
             for (screen, dockAreaCG) in dockAreasCG {
                 let screenFrameCG = CGRect(
@@ -218,7 +247,8 @@ class WindowsResizeManager: ObservableObject {
                     height: screen.frame.height
                 )
 
-                guard screenFrameCG.intersects(windowFrame) && windowFrame.intersects(dockAreaCG) else {
+                guard screenFrameCG.intersects(windowFrame) && windowFrame.intersects(dockAreaCG),
+                      let app = Self.adjustableApp(pid: filteredWindow.pid) else {
                     continue
                 }
 
@@ -262,6 +292,8 @@ class WindowsResizeManager: ObservableObject {
                 }
 
                 guard newFrame != windowFrame else { continue }
+                let previousAttempts = rejectedAdjustments[windowID].flatMap { $0.frame == windowFrame ? $0.attempts : nil } ?? 0
+                rejectedAdjustments[windowID] = (windowFrame, previousAttempts + 1)
 
                 AppLogger.shared.info("Adjusting window for \(app.localizedName ?? "Unknown") from \(windowFrame) to \(newFrame). Resized: \(resized)")
 
@@ -285,6 +317,34 @@ class WindowsResizeManager: ObservableObject {
                     AppLogger.shared.error("Failed to move window for \(app.localizedName ?? "Unknown")")
                 }
             }
+        }
+    }
+
+    /// NSRunningApplication lookup is an IPC round-trip, so it runs only for windows touching a dock area.
+    private static func adjustableApp(pid: pid_t) -> NSRunningApplication? {
+        guard let app = NSRunningApplication(processIdentifier: pid),
+              app.activationPolicy == .regular,
+              app.bundleIdentifier != Bundle.main.bundleIdentifier,
+              !app.isTerminated,
+              !app.isHidden else { return nil }
+        return app
+    }
+
+    private func windowFrames(in windowList: [[String: Any]]) -> [CGWindowID: CGRect] {
+        var frames: [CGWindowID: CGRect] = [:]
+        for info in windowList {
+            guard let windowID = info[kCGWindowNumber as String] as? CGWindowID,
+                  let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let frame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+            frames[windowID] = frame
+        }
+        return frames
+    }
+
+    /// Keeps a rejection only while the window still sits at the frame we failed to move it from.
+    private func pruneRejectedAdjustments(liveWindowFrames: [CGWindowID: CGRect]) {
+        rejectedAdjustments = rejectedAdjustments.filter { windowID, rejected in
+            liveWindowFrames[windowID] == rejected.frame
         }
     }
 

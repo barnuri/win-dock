@@ -20,6 +20,7 @@ public class BackgroundTaskCoordinator: ObservableObject {
     private var updateWorkItem: DispatchWorkItem?
     private var lastUpdateTime: Date = .distantPast
     private var coalescedNotifications: Set<String> = []
+    private var pendingUpdateCount: Int = 0
 
     // Debouncing configuration - tuned for optimal performance
     private let minUpdateInterval: TimeInterval = 0.5  // Increased from 0.2s to prevent storms
@@ -53,6 +54,7 @@ public class BackgroundTaskCoordinator: ObservableObject {
     ///   - priority: `.userInitiated` bypasses debouncing; `.background` (default) debounces
     public func scheduleUpdate(reason: String, priority: UpdatePriority = .background) {
         coalescedNotifications.insert(reason)
+        pendingUpdateCount += 1
 
         // Cancel any pending update
         updateWorkItem?.cancel()
@@ -79,8 +81,8 @@ public class BackgroundTaskCoordinator: ObservableObject {
         let multiplier = isOnBattery() ? batteryDelayMultiplier : 1.0
         let timeSinceLastUpdate = now.timeIntervalSince(lastUpdateTime)
 
-        if coalescedNotifications.count >= maxCoalescedUpdates {
-            AppLogger.shared.debug("Forcing immediate update - batch limit reached (\(coalescedNotifications.count) notifications)")
+        if pendingUpdateCount >= maxCoalescedUpdates {
+            AppLogger.shared.debug("Forcing immediate update - batch limit reached (\(pendingUpdateCount) notifications)")
             return 0.05
         }
         if timeSinceLastUpdate < minUpdateInterval {
@@ -94,6 +96,7 @@ public class BackgroundTaskCoordinator: ObservableObject {
         updateWorkItem?.cancel()
         updateWorkItem = nil
         coalescedNotifications.removeAll()
+        pendingUpdateCount = 0
         AppLogger.shared.debug("Cancelled all pending updates")
     }
 
@@ -106,6 +109,7 @@ public class BackgroundTaskCoordinator: ObservableObject {
         isProcessing = true
         let reasons = coalescedNotifications
         coalescedNotifications.removeAll()
+        pendingUpdateCount = 0
 
         AppLogger.shared.info("Executing dock update for reasons: \(reasons.joined(separator: ", "))")
 

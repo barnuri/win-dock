@@ -194,7 +194,7 @@ class UserProfileManager: ObservableObject {
                 try store.enumerateContacts(with: request) { contact, stop in
                     // Look for indicators that this might be the user's card
                     let fullName = "\(contact.givenName) \(contact.familyName)".trimmingCharacters(in: .whitespaces)
-                    if fullName == NSFullUserName() || contact.imageData != nil {
+                    if fullName == NSFullUserName() {
                         meContact = contact
                         stop.pointee = true
                     }
@@ -350,10 +350,10 @@ class UserProfileManager: ObservableObject {
         let pipe = Pipe()
         task.standardOutput = pipe
         task.launch()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
         
         if task.terminationStatus == 0 {
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
             
             // Parse the JPEG data from the output
@@ -377,13 +377,13 @@ class UserProfileManager: ObservableObject {
         let dsclPipe = Pipe()
         dsclTask.standardOutput = dsclPipe
         dsclTask.launch()
+        let dsclData = dsclPipe.fileHandleForReading.readDataToEndOfFile()
         dsclTask.waitUntilExit()
         
         guard dsclTask.terminationStatus == 0 else {
             return nil
         }
         
-        let dsclData = dsclPipe.fileHandleForReading.readDataToEndOfFile()
         guard let dsclOutput = String(data: dsclData, encoding: .utf8) else {
             return nil
         }
@@ -394,38 +394,13 @@ class UserProfileManager: ObservableObject {
             return nil
         }
         
-        let hexString = lines[1...].joined().trimmingCharacters(in: .whitespaces)
+        let hexString = String(lines[1...].joined().filter { $0.isHexDigit })
         
-        // Convert hex string to binary data using xxd
-        let xxdTask = Process()
-        xxdTask.launchPath = "/usr/bin/xxd"
-        xxdTask.arguments = ["-r", "-p"]
-        
-        let xxdInputPipe = Pipe()
-        let xxdOutputPipe = Pipe()
-        xxdTask.standardInput = xxdInputPipe
-        xxdTask.standardOutput = xxdOutputPipe
-        
-        xxdTask.launch()
-        
-        // Write hex string to xxd stdin
-        if let hexData = hexString.data(using: .utf8) {
-            xxdInputPipe.fileHandleForWriting.write(hexData)
-        }
-        xxdInputPipe.fileHandleForWriting.closeFile()
-        
-        xxdTask.waitUntilExit()
-        
-        guard xxdTask.terminationStatus == 0 else {
+        guard let imageData = Data(fromHexString: hexString), imageData.count > 0 else {
             return nil
         }
         
-        let imageData = xxdOutputPipe.fileHandleForReading.readDataToEndOfFile()
-        if imageData.count > 0 {
-            return NSImage(data: imageData)
-        }
-        
-        return nil
+        return NSImage(data: imageData)
     }
     
     private func getDirectoryServicesName() -> String? {
@@ -436,10 +411,10 @@ class UserProfileManager: ObservableObject {
         let pipe = Pipe()
         task.standardOutput = pipe
         task.launch()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
         
         if task.terminationStatus == 0 {
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
             
             // Parse the real name from the output

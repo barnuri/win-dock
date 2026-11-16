@@ -104,10 +104,9 @@ struct BatteryInfo: Equatable {
                 percentage = capacity
             }
             
-            if let powerSourceState = desc[kIOPSPowerSourceStateKey] as? String {
-                isCharging = powerSourceState == kIOPSACPowerValue
-            }
+            isCharging = desc[kIOPSIsChargingKey] as? Bool ?? false
             
+            timeRemaining = nil
             if let timeToEmpty = desc[kIOPSTimeToEmptyKey] as? Int, timeToEmpty > 0 {
                 timeRemaining = timeToEmpty
             }
